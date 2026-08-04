@@ -3,6 +3,7 @@
 from fastapi import FastAPI
 
 from apps.api.app.api.routes.health import router as health_router
+from apps.api.app.api.routes.impact import router as impact_router
 from apps.api.app.api.routes.specifications import router as specifications_router
 from apps.api.app.core.config import settings
 from apps.api.app.core.exceptions import register_exception_handlers
@@ -14,8 +15,8 @@ def create_app() -> FastAPI:
     app.include_router(health_router)
     app.include_router(health_router, prefix=settings.api_prefix)
     app.include_router(specifications_router, prefix=settings.api_prefix)
+    app.include_router(impact_router, prefix=settings.api_prefix)
     return app
 
 
 app = create_app()
-

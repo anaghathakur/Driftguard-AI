@@ -26,7 +26,19 @@ class Settings:
     max_spec_file_bytes: int = _positive_int(
         "DRIFTGUARD_MAX_SPEC_FILE_BYTES", 5 * 1024 * 1024
     )
+    max_repository_archive_bytes: int = _positive_int(
+        "DRIFTGUARD_MAX_REPOSITORY_ARCHIVE_BYTES", 20 * 1024 * 1024
+    )
+    max_repository_files: int = _positive_int("DRIFTGUARD_MAX_REPOSITORY_FILES", 2_000)
+    max_repository_file_bytes: int = _positive_int(
+        "DRIFTGUARD_MAX_REPOSITORY_FILE_BYTES", 1024 * 1024
+    )
+    max_repository_uncompressed_bytes: int = _positive_int(
+        "DRIFTGUARD_MAX_REPOSITORY_UNCOMPRESSED_BYTES", 50 * 1024 * 1024
+    )
+    max_repository_compression_ratio: int = _positive_int(
+        "DRIFTGUARD_MAX_REPOSITORY_COMPRESSION_RATIO", 100
+    )
 
 
 settings = Settings()
-

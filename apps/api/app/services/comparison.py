@@ -27,6 +27,21 @@ class SpecificationComparisonService:
     ) -> ComparisonResponse:
         old_contract = normalize_openapi(parse_openapi_document(old_filename, old_content))
         new_contract = normalize_openapi(parse_openapi_document(new_filename, new_content))
+        return self.compare_contracts(
+            old_contract=old_contract,
+            old_content=old_content,
+            new_contract=new_contract,
+            new_content=new_content,
+        )
+
+    def compare_contracts(
+        self,
+        *,
+        old_contract: NormalizedContract,
+        old_content: bytes,
+        new_contract: NormalizedContract,
+        new_content: bytes,
+    ) -> ComparisonResponse:
         changes = ContractDiffer().compare(old_contract, new_contract)
         counts = categories(changes)
         return ComparisonResponse(
@@ -50,4 +65,3 @@ class SpecificationComparisonService:
             sha256=hashlib.sha256(content).hexdigest(),
             operation_count=len(contract.operations),
         )
-
