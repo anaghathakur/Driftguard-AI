@@ -23,6 +23,9 @@ def _positive_int(name: str, default: int) -> int:
 class Settings:
     app_name: str = "DriftGuard AI"
     api_prefix: str = "/api/v1"
+    database_path: str = os.getenv(
+        "DRIFTGUARD_DATABASE_PATH", "data/driftguard.sqlite3"
+    )
     max_spec_file_bytes: int = _positive_int(
         "DRIFTGUARD_MAX_SPEC_FILE_BYTES", 5 * 1024 * 1024
     )

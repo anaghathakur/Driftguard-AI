@@ -82,3 +82,5 @@ class ComparisonResponse(BaseModel):
     new_contract: ContractMetadata
     summary: ComparisonSummary
     changes: list[ApiChange]
+    analysis_id: str | None = None
+    duplicate: bool = False

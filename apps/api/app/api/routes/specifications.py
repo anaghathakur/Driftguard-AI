@@ -4,12 +4,13 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter, File, UploadFile
+from fastapi import APIRouter, Depends, File, UploadFile
 
 from apps.api.app.core.config import settings
+from apps.api.app.core.dependencies import get_analysis_pipeline_service
 from apps.api.app.core.exceptions import DriftGuardError
 from apps.api.app.schemas.comparison import ComparisonResponse
-from apps.api.app.services.comparison import SpecificationComparisonService
+from apps.api.app.services.analysis_pipeline import AnalysisPipelineService
 
 router = APIRouter(prefix="/specifications", tags=["specifications"])
 
@@ -31,10 +32,11 @@ async def _read_limited(upload: UploadFile) -> bytes:
 async def compare_specifications(
     old_spec: Annotated[UploadFile, File()],
     new_spec: Annotated[UploadFile, File()],
+    service: Annotated[AnalysisPipelineService, Depends(get_analysis_pipeline_service)],
 ) -> ComparisonResponse:
     old_content = await _read_limited(old_spec)
     new_content = await _read_limited(new_spec)
-    return SpecificationComparisonService().compare(
+    return service.compare(
         old_filename=old_spec.filename or "",
         old_content=old_content,
         new_filename=new_spec.filename or "",

@@ -4,12 +4,13 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter, File, UploadFile
+from fastapi import APIRouter, Depends, File, UploadFile
 
 from apps.api.app.core.config import settings
+from apps.api.app.core.dependencies import get_analysis_pipeline_service
 from apps.api.app.core.exceptions import DriftGuardError
 from apps.api.app.schemas.impact import ImpactAnalysisResponse
-from apps.api.app.services.impact import ImpactAnalysisService
+from apps.api.app.services.analysis_pipeline import AnalysisPipelineService
 
 router = APIRouter(prefix="/impact", tags=["impact"])
 
@@ -45,11 +46,12 @@ async def analyze_impact(
     old_spec: Annotated[UploadFile, File()],
     new_spec: Annotated[UploadFile, File()],
     repository: Annotated[UploadFile, File()],
+    service: Annotated[AnalysisPipelineService, Depends(get_analysis_pipeline_service)],
 ) -> ImpactAnalysisResponse:
     old_content = await _read_specification(old_spec)
     new_content = await _read_specification(new_spec)
     repository_content = await _read_repository(repository)
-    return ImpactAnalysisService().analyze(
+    return service.analyze_impact(
         old_filename=old_spec.filename or "",
         old_content=old_content,
         new_filename=new_spec.filename or "",

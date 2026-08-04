@@ -3,12 +3,13 @@
 __pycache__/
 *.py[cod]
 .pytest_cache/
+.pytest-data/
 .ruff_cache/
 .mypy_cache/
 htmlcov/
 .coverage
 dist/
 build/
+data/
 *.egg-info/
 .DS_Store
-

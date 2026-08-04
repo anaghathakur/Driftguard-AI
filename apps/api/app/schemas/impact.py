@@ -57,3 +57,5 @@ class ImpactAnalysisResponse(BaseModel):
     repository: RepositoryScanSummary
     impact_summary: ImpactSummary
     impacts: list[ChangeImpact]
+    analysis_id: str | None = None
+    duplicate: bool = False
