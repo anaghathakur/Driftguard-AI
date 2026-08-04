@@ -1,0 +1,26 @@
+openapi: 3.0.3
+info:
+  title: Fictional Payments API
+  version: 2.0.0
+paths:
+  /payments:
+    post:
+      operationId: createPayment
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [customer_id, amount, currency]
+              properties:
+                customer_id:
+                  type: string
+                amount:
+                  type: integer
+                currency:
+                  type: string
+      responses:
+        "201":
+          description: Created
+
