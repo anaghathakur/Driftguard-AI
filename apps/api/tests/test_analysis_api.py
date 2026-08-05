@@ -72,6 +72,7 @@ def test_impact_history_endpoints_and_cascading_delete(
         "compare_contracts",
         "scan_repository",
         "match_api_usage",
+        "classify_risk",
         "persist_results",
     ]
     assert {stage["status"] for stage in pipeline} == {"succeeded"}
@@ -84,6 +85,7 @@ def test_impact_history_endpoints_and_cascading_delete(
         for table in (
             "analysis_changes",
             "repository_matches",
+            "risk_predictions",
             "pipeline_stages",
             "analysis_failures",
         ):
@@ -153,6 +155,7 @@ def test_comparison_history_has_no_repository_data(client, base_spec, clone):
     assert [stage["stage_name"] for stage in pipeline] == [
         "validate_and_normalize_specifications",
         "compare_contracts",
+        "classify_risk",
         "persist_results",
     ]
 

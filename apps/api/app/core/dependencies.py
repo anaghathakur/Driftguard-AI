@@ -12,6 +12,7 @@ from apps.api.app.infrastructure.sqlite_analysis_repository import (
     SQLiteAnalysisRepository,
 )
 from apps.api.app.ports.analysis_repository import AnalysisRepository
+from apps.api.app.risk.classifier import RiskClassifier
 from apps.api.app.services.analysis_pipeline import AnalysisPipelineService
 
 
@@ -26,7 +27,13 @@ def get_analysis_repository() -> AnalysisRepository:
     return get_default_analysis_repository()
 
 
+@lru_cache
+def get_risk_classifier() -> RiskClassifier:
+    return RiskClassifier(settings.risk_model_path, settings.risk_model_metadata_path)
+
+
 def get_analysis_pipeline_service(
     repository: Annotated[AnalysisRepository, Depends(get_analysis_repository)],
+    risk_classifier: Annotated[RiskClassifier, Depends(get_risk_classifier)],
 ) -> AnalysisPipelineService:
-    return AnalysisPipelineService(repository)
+    return AnalysisPipelineService(repository, risk_classifier)

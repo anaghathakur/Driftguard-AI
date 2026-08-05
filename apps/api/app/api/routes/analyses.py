@@ -14,6 +14,7 @@ from apps.api.app.schemas.analysis import (
     PipelineStageResponse,
 )
 from apps.api.app.schemas.comparison import ApiChange
+from apps.api.app.schemas.risk import RiskPrediction
 from apps.api.app.services.analysis_pipeline import AnalysisPipelineService
 
 router = APIRouter(prefix="/analyses", tags=["analyses"])
@@ -55,6 +56,20 @@ def get_analysis_pipeline(
     analysis_id: str, service: AnalysisService
 ) -> list[PipelineStageResponse]:
     return service.get_pipeline(analysis_id)
+
+
+@router.get("/{analysis_id}/risks", response_model=list[RiskPrediction])
+def get_analysis_risks(
+    analysis_id: str, service: AnalysisService
+) -> list[RiskPrediction]:
+    return service.get_risk_predictions(analysis_id)
+
+
+@router.get("/{analysis_id}/risks/{change_id}", response_model=RiskPrediction)
+def get_analysis_risk(
+    analysis_id: str, change_id: str, service: AnalysisService
+) -> RiskPrediction:
+    return service.get_risk_prediction(analysis_id, change_id)
 
 
 @router.delete("/{analysis_id}", status_code=status.HTTP_204_NO_CONTENT)

@@ -1,0 +1,66 @@
+{
+  "artifact_sha256": "e76f1952b1b2fa9e98c71cd8cef700294f5696419ce61f6684ef06f344834d88",
+  "dataset": {
+    "class_distribution": {
+      "critical": 861,
+      "high": 1133,
+      "low": 1219,
+      "medium": 787
+    },
+    "kind": "synthetic",
+    "seed": 42,
+    "sha256": "973b1f0186537822d4701f588278b167782911286387321c3e995969f97c6edd",
+    "size": 4000
+  },
+  "feature_names": [
+    "is_breaking",
+    "is_potentially_breaking",
+    "severity_score",
+    "is_endpoint_removed",
+    "is_method_removed",
+    "is_auth_change",
+    "is_required_input_added",
+    "is_input_removed_or_renamed",
+    "is_type_change",
+    "is_response_removed",
+    "is_enum_value_removed",
+    "is_non_breaking_addition",
+    "match_count_norm",
+    "impacted_files_norm",
+    "high_confidence_ratio",
+    "subject_depth_norm"
+  ],
+  "feature_schema_version": "1.0.0",
+  "limitations": [
+    "Training labels are synthetic and do not establish production accuracy.",
+    "Metrics measure held-out synthetic data only.",
+    "The deterministic rule baseline remains visible and is used as fallback."
+  ],
+  "metrics": {
+    "logistic_regression": {
+      "accuracy": 0.908,
+      "balanced_accuracy": 0.90675,
+      "macro_f1": 0.904413
+    },
+    "random_forest": {
+      "accuracy": 0.888,
+      "balanced_accuracy": 0.886599,
+      "macro_f1": 0.883029
+    }
+  },
+  "model_name": "logistic_regression",
+  "model_version": "1.0.0",
+  "runtime": {
+    "joblib": "1.5.3",
+    "numpy": "2.4.6",
+    "python": "3.14.6",
+    "scikit_learn": "1.9.0"
+  },
+  "selection_metric": "macro_f1",
+  "split": {
+    "random_state": 42,
+    "stratified": true,
+    "test_fraction": 0.25
+  },
+  "trained_at": "2026-08-04T17:36:08.416007Z"
+}

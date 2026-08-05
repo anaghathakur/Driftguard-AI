@@ -15,6 +15,7 @@ from apps.api.app.domain.analysis import (
 )
 from apps.api.app.schemas.comparison import ApiChange, ComparisonResponse
 from apps.api.app.schemas.impact import ChangeImpact, ImpactSummary, RepositoryScanSummary
+from apps.api.app.schemas.risk import RiskPrediction
 
 
 class AnalysisRepository(ABC):
@@ -57,6 +58,7 @@ class AnalysisRepository(ABC):
         repository_summary: RepositoryScanSummary | None,
         impact_summary: ImpactSummary | None,
         impacts: list[ChangeImpact],
+        risk_predictions: list[RiskPrediction],
         stage_id: int,
         completed_at: datetime,
         duration_ms: int,
@@ -76,6 +78,9 @@ class AnalysisRepository(ABC):
 
     @abstractmethod
     def get_pipeline(self, analysis_id: str) -> list[PipelineStageRecord]: ...
+
+    @abstractmethod
+    def get_risk_predictions(self, analysis_id: str) -> list[RiskPrediction]: ...
 
     @abstractmethod
     def get_failure(self, analysis_id: str) -> FailureRecord | None: ...

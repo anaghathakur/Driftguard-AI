@@ -25,6 +25,7 @@ from apps.api.app.domain.analysis import (
 from apps.api.app.ports.analysis_repository import AnalysisRepository
 from apps.api.app.schemas.comparison import ApiChange, ComparisonResponse
 from apps.api.app.schemas.impact import ChangeImpact, ImpactSummary, RepositoryScanSummary
+from apps.api.app.schemas.risk import RiskPrediction
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS analyses (
@@ -86,6 +87,32 @@ CREATE TABLE IF NOT EXISTS repository_matches (
         REFERENCES analysis_changes(analysis_id, change_id) ON DELETE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS risk_predictions (
+    prediction_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    analysis_id TEXT NOT NULL,
+    change_id TEXT NOT NULL,
+    risk_level TEXT NOT NULL CHECK (risk_level IN ('low', 'medium', 'high', 'critical')),
+    risk_score REAL NOT NULL CHECK (risk_score >= 0 AND risk_score <= 100),
+    prediction_source TEXT NOT NULL CHECK (
+        prediction_source IN ('model', 'deterministic_fallback')
+    ),
+    model_name TEXT NOT NULL,
+    model_version TEXT NOT NULL,
+    baseline_level TEXT NOT NULL CHECK (
+        baseline_level IN ('low', 'medium', 'high', 'critical')
+    ),
+    baseline_score REAL NOT NULL CHECK (baseline_score >= 0 AND baseline_score <= 100),
+    class_probabilities_json TEXT NOT NULL,
+    features_json TEXT NOT NULL,
+    reasons_json TEXT NOT NULL,
+    top_drivers_json TEXT NOT NULL,
+    fallback_reason TEXT,
+    predicted_at TEXT NOT NULL,
+    UNIQUE (analysis_id, change_id),
+    FOREIGN KEY (analysis_id, change_id)
+        REFERENCES analysis_changes(analysis_id, change_id) ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS pipeline_stages (
     stage_id INTEGER PRIMARY KEY AUTOINCREMENT,
     analysis_id TEXT NOT NULL,
@@ -115,6 +142,7 @@ CREATE TABLE IF NOT EXISTS analysis_failures (
 CREATE INDEX IF NOT EXISTS idx_analyses_created_at ON analyses(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_changes_analysis ON analysis_changes(analysis_id, ordinal);
 CREATE INDEX IF NOT EXISTS idx_matches_analysis ON repository_matches(analysis_id, match_id);
+CREATE INDEX IF NOT EXISTS idx_risks_analysis ON risk_predictions(analysis_id, prediction_id);
 CREATE INDEX IF NOT EXISTS idx_pipeline_analysis ON pipeline_stages(analysis_id, ordinal);
 CREATE INDEX IF NOT EXISTS idx_failures_analysis ON analysis_failures(analysis_id, failure_id);
 """
@@ -250,6 +278,7 @@ class SQLiteAnalysisRepository(AnalysisRepository):
         repository_summary: RepositoryScanSummary | None,
         impact_summary: ImpactSummary | None,
         impacts: list[ChangeImpact],
+        risk_predictions: list[RiskPrediction],
         stage_id: int,
         completed_at: datetime,
         duration_ms: int,
@@ -302,6 +331,42 @@ class SQLiteAnalysisRepository(AnalysisRepository):
                             match.evidence[:240],
                         ),
                     )
+            for prediction in risk_predictions:
+                connection.execute(
+                    """
+                    INSERT INTO risk_predictions (
+                        analysis_id, change_id, risk_level, risk_score,
+                        prediction_source, model_name, model_version,
+                        baseline_level, baseline_score, class_probabilities_json,
+                        features_json, reasons_json, top_drivers_json,
+                        fallback_reason, predicted_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        analysis_id,
+                        prediction.change_id,
+                        prediction.risk_level.value,
+                        prediction.risk_score,
+                        prediction.prediction_source.value,
+                        prediction.model_name,
+                        prediction.model_version,
+                        prediction.baseline_level.value,
+                        prediction.baseline_score,
+                        _json(
+                            {
+                                level.value: probability
+                                for level, probability in prediction.class_probabilities.items()
+                            }
+                        ),
+                        _json(prediction.features),
+                        _json(prediction.reasons),
+                        _json(
+                            [driver.model_dump(mode="json") for driver in prediction.top_drivers]
+                        ),
+                        prediction.fallback_reason,
+                        _timestamp(prediction.predicted_at),
+                    ),
+                )
             connection.execute(
                 """
                 UPDATE pipeline_stages
@@ -410,6 +475,40 @@ class SQLiteAnalysisRepository(AnalysisRepository):
                 (analysis_id,),
             ).fetchall()
         return [_stage_record(row) for row in rows]
+
+    def get_risk_predictions(self, analysis_id: str) -> list[RiskPrediction]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT * FROM risk_predictions
+                WHERE analysis_id = ? ORDER BY prediction_id
+                """,
+                (analysis_id,),
+            ).fetchall()
+        return [
+            RiskPrediction.model_validate(
+                {
+                    "analysis_id": row["analysis_id"],
+                    "change_id": row["change_id"],
+                    "risk_level": row["risk_level"],
+                    "risk_score": row["risk_score"],
+                    "prediction_source": row["prediction_source"],
+                    "model_name": row["model_name"],
+                    "model_version": row["model_version"],
+                    "baseline_level": row["baseline_level"],
+                    "baseline_score": row["baseline_score"],
+                    "class_probabilities": _load_json(
+                        row["class_probabilities_json"]
+                    ),
+                    "features": _load_json(row["features_json"]),
+                    "reasons": _load_json(row["reasons_json"]),
+                    "top_drivers": _load_json(row["top_drivers_json"]),
+                    "fallback_reason": row["fallback_reason"],
+                    "predicted_at": _datetime(row["predicted_at"]),
+                }
+            )
+            for row in rows
+        ]
 
     def get_failure(self, analysis_id: str) -> FailureRecord | None:
         with self._connect() as connection:

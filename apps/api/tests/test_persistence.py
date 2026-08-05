@@ -9,6 +9,7 @@ import pytest
 
 from apps.api.app.domain.analysis import AnalysisKind, AnalysisStatus, AnalysisSubmission
 from apps.api.app.openapi.normalizer import normalize_openapi
+from apps.api.app.risk.classifier import RiskClassifier
 from apps.api.app.services.analysis_pipeline import AnalysisPipelineService
 from apps.api.app.services.comparison import SpecificationComparisonService
 
@@ -33,6 +34,7 @@ def test_database_initializes_all_milestone_tables(analysis_repository):
         "analyses",
         "analysis_changes",
         "repository_matches",
+        "risk_predictions",
         "pipeline_stages",
         "analysis_failures",
     } <= tables
@@ -45,7 +47,9 @@ def test_duplicate_comparison_reuses_persisted_analysis(
     new["paths"]["/payments"]["post"]["parameters"][0]["schema"]["type"] = "integer"
     old_content = specification_bytes(base_spec)
     new_content = specification_bytes(new)
-    service = AnalysisPipelineService(analysis_repository)
+    service = AnalysisPipelineService(
+        analysis_repository, RiskClassifier("missing.joblib", "missing.json")
+    )
 
     first = service.compare(
         old_filename="old.json",
@@ -112,6 +116,7 @@ def test_result_write_rolls_back_all_changes_on_constraint_failure(
             repository_summary=None,
             impact_summary=None,
             impacts=[],
+            risk_predictions=[],
             stage_id=stage_id,
             completed_at=datetime.now(UTC),
             duration_ms=1,

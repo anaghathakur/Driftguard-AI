@@ -26,6 +26,14 @@ class Settings:
     database_path: str = os.getenv(
         "DRIFTGUARD_DATABASE_PATH", "data/driftguard.sqlite3"
     )
+    risk_model_path: str = os.getenv(
+        "DRIFTGUARD_RISK_MODEL_PATH",
+        "apps/api/models/risk/v1.0.0/risk_model.joblib",
+    )
+    risk_model_metadata_path: str = os.getenv(
+        "DRIFTGUARD_RISK_MODEL_METADATA_PATH",
+        "apps/api/models/risk/v1.0.0/metadata.json",
+    )
     max_spec_file_bytes: int = _positive_int(
         "DRIFTGUARD_MAX_SPEC_FILE_BYTES", 5 * 1024 * 1024
     )

@@ -23,6 +23,7 @@ from apps.api.app.openapi.parser import parse_openapi_document
 from apps.api.app.ports.analysis_repository import AnalysisRepository
 from apps.api.app.repository.matcher import ApiImpactMatcher
 from apps.api.app.repository.scanner import RepositoryArchiveScanner
+from apps.api.app.risk.classifier import RiskClassifier
 from apps.api.app.schemas.analysis import (
     AnalysisDetail,
     AnalysisFailureResponse,
@@ -44,14 +45,19 @@ from apps.api.app.schemas.impact import (
     ImpactSummary,
     RepositoryScanSummary,
 )
+from apps.api.app.schemas.risk import RiskPrediction
 from apps.api.app.services.comparison import SpecificationComparisonService
 
 T = TypeVar("T")
+ANALYSIS_PIPELINE_VERSION = "4.0.0"
 
 
 class AnalysisPipelineService:
-    def __init__(self, repository: AnalysisRepository) -> None:
+    def __init__(
+        self, repository: AnalysisRepository, risk_classifier: RiskClassifier
+    ) -> None:
         self.repository = repository
+        self.risk_classifier = risk_classifier
 
     def compare(
         self,
@@ -92,7 +98,11 @@ class AnalysisPipelineService:
         ).model_copy(
             update={"analysis_id": creation.analysis.analysis_id, "duplicate": False}
         )
-        pipeline.persist(comparison=comparison)
+        risk_predictions = pipeline.run(
+            "classify_risk",
+            lambda: self.risk_classifier.predict_all(comparison.changes, []),
+        )
+        pipeline.persist(comparison=comparison, risk_predictions=risk_predictions)
         return comparison
 
     def analyze_impact(
@@ -167,11 +177,16 @@ class AnalysisPipelineService:
             impacted_files=len(impacted_paths),
             total_matches=sum(len(impact.matches) for impact in impacts),
         )
+        risk_predictions = pipeline.run(
+            "classify_risk",
+            lambda: self.risk_classifier.predict_all(comparison.changes, impacts),
+        )
         pipeline.persist(
             comparison=comparison,
             repository_summary=repository_summary,
             impact_summary=impact_summary,
             impacts=impacts,
+            risk_predictions=risk_predictions,
         )
         return ImpactAnalysisResponse(
             comparison=comparison,
@@ -217,6 +232,21 @@ class AnalysisPipelineService:
             )
             for stage in self.repository.get_pipeline(analysis_id)
         ]
+
+    def get_risk_predictions(self, analysis_id: str) -> list[RiskPrediction]:
+        self._require_analysis(analysis_id)
+        return self.repository.get_risk_predictions(analysis_id)
+
+    def get_risk_prediction(self, analysis_id: str, change_id: str) -> RiskPrediction:
+        predictions = self.get_risk_predictions(analysis_id)
+        for prediction in predictions:
+            if prediction.change_id == change_id:
+                return prediction
+        raise DriftGuardError(
+            code="risk_prediction_not_found",
+            message="The requested risk prediction does not exist.",
+            status_code=404,
+        )
 
     def delete(self, analysis_id: str) -> None:
         if not self.repository.delete(analysis_id):
@@ -365,6 +395,7 @@ class _PipelineExecution:
         repository_summary: RepositoryScanSummary | None = None,
         impact_summary: ImpactSummary | None = None,
         impacts: list[ChangeImpact] | None = None,
+        risk_predictions: list[RiskPrediction] | None = None,
     ) -> None:
         stage_name = "persist_results"
         stage_id, started_at, started_clock = self._start(stage_name)
@@ -375,6 +406,7 @@ class _PipelineExecution:
                 repository_summary=repository_summary,
                 impact_summary=impact_summary,
                 impacts=impacts or [],
+                risk_predictions=risk_predictions or [],
                 stage_id=stage_id,
                 completed_at=_utc_now(),
                 duration_ms=_duration_ms(started_clock),
@@ -432,6 +464,7 @@ def _submission(
     )
     fingerprint_source = json.dumps(
         {
+            "pipeline_version": ANALYSIS_PIPELINE_VERSION,
             "kind": kind.value,
             "old": old_hash,
             "new": new_hash,
