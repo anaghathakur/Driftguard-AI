@@ -1,0 +1,38 @@
+﻿{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Payments API",
+    "version": "2.0.0"
+  },
+  "paths": {
+    "/payments": {
+      "post": {
+        "operationId": "createPayment",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "amount": {
+                    "type": "number"
+                  },
+                  "currency": {
+                    "type": "string"
+                  }
+                },
+                "required": ["amount", "currency"]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Payment created"
+          }
+        }
+      }
+    }
+  }
+}
