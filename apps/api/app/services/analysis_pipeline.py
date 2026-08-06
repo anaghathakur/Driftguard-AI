@@ -18,6 +18,12 @@ from apps.api.app.domain.analysis import (
     AnalysisStatus,
     AnalysisSubmission,
 )
+from apps.api.app.migration.provider import (
+    MockMigrationRecommendationProvider,
+)
+from apps.api.app.migration.service import (
+    MigrationRecommendationService,
+)
 from apps.api.app.openapi.normalizer import normalize_openapi
 from apps.api.app.openapi.parser import parse_openapi_document
 from apps.api.app.ports.analysis_repository import AnalysisRepository
@@ -45,6 +51,7 @@ from apps.api.app.schemas.impact import (
     ImpactSummary,
     RepositoryScanSummary,
 )
+from apps.api.app.schemas.migration import MigrationRecommendation
 from apps.api.app.schemas.risk import RiskPrediction
 from apps.api.app.services.comparison import SpecificationComparisonService
 
@@ -54,10 +61,20 @@ ANALYSIS_PIPELINE_VERSION = "4.0.0"
 
 class AnalysisPipelineService:
     def __init__(
-        self, repository: AnalysisRepository, risk_classifier: RiskClassifier
+    self,
+    repository: AnalysisRepository,
+    risk_classifier: RiskClassifier,
+    migration_service: MigrationRecommendationService | None = None,
     ) -> None:
         self.repository = repository
         self.risk_classifier = risk_classifier
+
+        self.migration_service = (
+            migration_service
+            or MigrationRecommendationService(
+                MockMigrationRecommendationProvider()
+            )
+        )   
 
     def compare(
         self,
@@ -100,10 +117,34 @@ class AnalysisPipelineService:
         )
         risk_predictions = pipeline.run(
             "classify_risk",
-            lambda: self.risk_classifier.predict_all(comparison.changes, []),
+            lambda: self.risk_classifier.predict_all(
+                comparison.changes,
+                [],
+            ),
         )
-        pipeline.persist(comparison=comparison, risk_predictions=risk_predictions)
-        return comparison
+
+        migration_recommendations = pipeline.run(
+            "generate_migration_recommendations",
+            lambda: self.migration_service.generate_all(
+                analysis_id=creation.analysis.analysis_id,
+                changes=comparison.changes,
+                impacts=[],
+                risks=risk_predictions,
+            ),
+        )
+
+        pipeline.persist(
+            comparison=comparison,
+            risk_predictions=risk_predictions,
+            migration_recommendations=migration_recommendations,
+        )
+
+        return comparison.model_copy(
+            update={
+                "analysis_id": creation.analysis.analysis_id,
+                "duplicate": creation.duplicate,
+            }
+        )
 
     def analyze_impact(
         self,
@@ -181,21 +222,33 @@ class AnalysisPipelineService:
             "classify_risk",
             lambda: self.risk_classifier.predict_all(comparison.changes, impacts),
         )
+
+        migration_recommendations = pipeline.run(
+            "generate_migration_recommendations",
+            lambda: self.migration_service.generate_all(
+                analysis_id=creation.analysis.analysis_id,
+                changes=comparison.changes,
+                impacts=impacts,
+                risks=risk_predictions,
+            ),
+        )
+
         pipeline.persist(
             comparison=comparison,
             repository_summary=repository_summary,
             impact_summary=impact_summary,
             impacts=impacts,
             risk_predictions=risk_predictions,
+            migration_recommendations=migration_recommendations,
         )
         return ImpactAnalysisResponse(
-            comparison=comparison,
-            repository=repository_summary,
-            impact_summary=impact_summary,
-            impacts=impacts,
-            analysis_id=creation.analysis.analysis_id,
-            duplicate=False,
-        )
+        analysis_id=creation.analysis.analysis_id,
+        duplicate=creation.duplicate,
+        comparison=comparison,
+        repository=repository_summary,
+        impact_summary=impact_summary,
+        impacts=impacts,
+    )
 
     def list_analyses(self, *, limit: int, offset: int) -> list[AnalysisListItem]:
         return [
@@ -245,6 +298,39 @@ class AnalysisPipelineService:
         raise DriftGuardError(
             code="risk_prediction_not_found",
             message="The requested risk prediction does not exist.",
+            status_code=404,
+        )
+
+    def get_migration_recommendations(
+        self,
+        analysis_id: str,
+    ) -> list[MigrationRecommendation]:
+        self._require_analysis(analysis_id)
+
+        return self.repository.get_migration_recommendations(
+            analysis_id
+        )
+
+
+    def get_migration_recommendation(
+        self,
+        analysis_id: str,
+        change_id: str,
+    ) -> MigrationRecommendation:
+        recommendations = self.get_migration_recommendations(
+            analysis_id
+        )
+
+        for recommendation in recommendations:
+            if recommendation.change_id == change_id:
+                return recommendation
+
+        raise DriftGuardError(
+            code="migration_recommendation_not_found",
+            message=(
+                "The requested migration recommendation "
+                "does not exist."
+            ),
             status_code=404,
         )
 
@@ -396,6 +482,9 @@ class _PipelineExecution:
         impact_summary: ImpactSummary | None = None,
         impacts: list[ChangeImpact] | None = None,
         risk_predictions: list[RiskPrediction] | None = None,
+        migration_recommendations: (
+            list[MigrationRecommendation] | None
+        ) = None,
     ) -> None:
         stage_name = "persist_results"
         stage_id, started_at, started_clock = self._start(stage_name)
@@ -407,6 +496,9 @@ class _PipelineExecution:
                 impact_summary=impact_summary,
                 impacts=impacts or [],
                 risk_predictions=risk_predictions or [],
+                migration_recommendations=(
+                    migration_recommendations or []
+                ),
                 stage_id=stage_id,
                 completed_at=_utc_now(),
                 duration_ms=_duration_ms(started_clock),

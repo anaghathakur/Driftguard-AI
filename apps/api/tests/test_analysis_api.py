@@ -73,6 +73,7 @@ def test_impact_history_endpoints_and_cascading_delete(
         "scan_repository",
         "match_api_usage",
         "classify_risk",
+        "generate_migration_recommendations",
         "persist_results",
     ]
     assert {stage["status"] for stage in pipeline} == {"succeeded"}
@@ -156,6 +157,7 @@ def test_comparison_history_has_no_repository_data(client, base_spec, clone):
         "validate_and_normalize_specifications",
         "compare_contracts",
         "classify_risk",
+        "generate_migration_recommendations",
         "persist_results",
     ]
 

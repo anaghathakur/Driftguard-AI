@@ -117,6 +117,7 @@ def test_result_write_rolls_back_all_changes_on_constraint_failure(
             impact_summary=None,
             impacts=[],
             risk_predictions=[],
+            migration_recommendations=[],
             stage_id=stage_id,
             completed_at=datetime.now(UTC),
             duration_ms=1,

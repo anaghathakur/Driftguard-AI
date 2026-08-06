@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+from apps.api.app.core.redaction import redact_secrets
 from apps.api.app.domain.analysis import (
     AnalysisCreation,
     AnalysisKind,
@@ -25,6 +26,7 @@ from apps.api.app.domain.analysis import (
 from apps.api.app.ports.analysis_repository import AnalysisRepository
 from apps.api.app.schemas.comparison import ApiChange, ComparisonResponse
 from apps.api.app.schemas.impact import ChangeImpact, ImpactSummary, RepositoryScanSummary
+from apps.api.app.schemas.migration import MigrationRecommendation
 from apps.api.app.schemas.risk import RiskPrediction
 
 SCHEMA = """
@@ -113,6 +115,56 @@ CREATE TABLE IF NOT EXISTS risk_predictions (
         REFERENCES analysis_changes(analysis_id, change_id) ON DELETE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS migration_recommendations (
+    recommendation_id TEXT PRIMARY KEY,
+    analysis_id TEXT NOT NULL,
+    change_id TEXT NOT NULL,
+    provider TEXT NOT NULL CHECK (
+        provider IN ('mock', 'gemini', 'deterministic')
+    ),
+    provider_model TEXT NOT NULL,
+    recommendation_source TEXT NOT NULL CHECK (
+        recommendation_source IN (
+            'mock',
+            'gemini',
+            'deterministic_fallback'
+        )
+    ),
+    prompt_version TEXT NOT NULL,
+    schema_version TEXT NOT NULL,
+    summary TEXT NOT NULL CHECK (length(summary) <= 500),
+    why_it_matters TEXT NOT NULL CHECK (length(why_it_matters) <= 1000),
+    affected_code_explanation TEXT NOT NULL CHECK (
+        length(affected_code_explanation) <= 1000
+    ),
+    migration_steps_json TEXT NOT NULL,
+    suggested_tests_json TEXT NOT NULL,
+    code_example TEXT NOT NULL CHECK (length(code_example) <= 2000),
+    assumptions_json TEXT NOT NULL,
+    warnings_json TEXT NOT NULL,
+    confidence REAL NOT NULL CHECK (
+        confidence >= 0 AND confidence <= 1
+    ),
+    provider_warning TEXT CHECK (
+        provider_warning IS NULL
+        OR length(provider_warning) <= 500
+    ),
+    redactions_applied INTEGER NOT NULL CHECK (
+        redactions_applied >= 0
+    ),
+    generated_at TEXT NOT NULL,
+    UNIQUE (
+        analysis_id,
+        change_id,
+        prompt_version,
+        schema_version,
+        provider_model
+    ),
+    FOREIGN KEY (analysis_id, change_id)
+        REFERENCES analysis_changes(analysis_id, change_id)
+        ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS pipeline_stages (
     stage_id INTEGER PRIMARY KEY AUTOINCREMENT,
     analysis_id TEXT NOT NULL,
@@ -143,6 +195,8 @@ CREATE INDEX IF NOT EXISTS idx_analyses_created_at ON analyses(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_changes_analysis ON analysis_changes(analysis_id, ordinal);
 CREATE INDEX IF NOT EXISTS idx_matches_analysis ON repository_matches(analysis_id, match_id);
 CREATE INDEX IF NOT EXISTS idx_risks_analysis ON risk_predictions(analysis_id, prediction_id);
+CREATE INDEX IF NOT EXISTS idx_migrations_analysis
+    ON migration_recommendations(analysis_id, generated_at);
 CREATE INDEX IF NOT EXISTS idx_pipeline_analysis ON pipeline_stages(analysis_id, ordinal);
 CREATE INDEX IF NOT EXISTS idx_failures_analysis ON analysis_failures(analysis_id, failure_id);
 """
@@ -279,6 +333,7 @@ class SQLiteAnalysisRepository(AnalysisRepository):
         impact_summary: ImpactSummary | None,
         impacts: list[ChangeImpact],
         risk_predictions: list[RiskPrediction],
+        migration_recommendations: list[MigrationRecommendation],
         stage_id: int,
         completed_at: datetime,
         duration_ms: int,
@@ -328,7 +383,7 @@ class SQLiteAnalysisRepository(AnalysisRepository):
                             match.column,
                             match.match_kind.value,
                             match.confidence.value,
-                            match.evidence[:240],
+                            redact_secrets(match.evidence[:240])[0][:240],
                         ),
                     )
             for prediction in risk_predictions:
@@ -367,6 +422,59 @@ class SQLiteAnalysisRepository(AnalysisRepository):
                         _timestamp(prediction.predicted_at),
                     ),
                 )
+            for recommendation in migration_recommendations:
+                connection.execute(
+                    """
+                    INSERT INTO migration_recommendations (
+                        recommendation_id,
+                        analysis_id,
+                        change_id,
+                        provider,
+                        provider_model,
+                        recommendation_source,
+                        prompt_version,
+                        schema_version,
+                        summary,
+                        why_it_matters,
+                        affected_code_explanation,
+                        migration_steps_json,
+                        suggested_tests_json,
+                        code_example,
+                        assumptions_json,
+                        warnings_json,
+                        confidence,
+                        provider_warning,
+                        redactions_applied,
+                        generated_at
+                    ) VALUES (
+                        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+                    )
+                    """,
+                    (
+                        recommendation.recommendation_id,
+                        analysis_id,
+                        recommendation.change_id,
+                        recommendation.provider.value,
+                        recommendation.provider_model,
+                        recommendation.recommendation_source.value,
+                        recommendation.prompt_version,
+                        recommendation.schema_version,
+                        recommendation.summary,
+                        recommendation.why_it_matters,
+                        recommendation.affected_code_explanation,
+                        _json(recommendation.migration_steps),
+                        _json(recommendation.suggested_tests),
+                        recommendation.code_example,
+                        _json(recommendation.assumptions),
+                        _json(recommendation.warnings),
+                        recommendation.confidence,
+                        recommendation.provider_warning,
+                        recommendation.redactions_applied,
+                        _timestamp(recommendation.generated_at),
+                    ),
+                )
+
             connection.execute(
                 """
                 UPDATE pipeline_stages
@@ -505,6 +613,59 @@ class SQLiteAnalysisRepository(AnalysisRepository):
                     "top_drivers": _load_json(row["top_drivers_json"]),
                     "fallback_reason": row["fallback_reason"],
                     "predicted_at": _datetime(row["predicted_at"]),
+                }
+            )
+            for row in rows
+        ]
+
+    def get_migration_recommendations(
+        self,
+        analysis_id: str,
+    ) -> list[MigrationRecommendation]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT *
+                FROM migration_recommendations
+                WHERE analysis_id = ?
+                ORDER BY generated_at, recommendation_id
+                """,
+                (analysis_id,),
+            ).fetchall()
+
+        return [
+            MigrationRecommendation.model_validate(
+                {
+                    "recommendation_id": row["recommendation_id"],
+                    "analysis_id": row["analysis_id"],
+                    "change_id": row["change_id"],
+                    "provider": row["provider"],
+                    "provider_model": row["provider_model"],
+                    "recommendation_source": row["recommendation_source"],
+                    "prompt_version": row["prompt_version"],
+                    "schema_version": row["schema_version"],
+                    "summary": row["summary"],
+                    "why_it_matters": row["why_it_matters"],
+                    "affected_code_explanation": row[
+                        "affected_code_explanation"
+                    ],
+                    "migration_steps": _load_json(
+                        row["migration_steps_json"]
+                    ),
+                    "suggested_tests": _load_json(
+                        row["suggested_tests_json"]
+                    ),
+                    "code_example": row["code_example"],
+                    "assumptions": _load_json(
+                        row["assumptions_json"]
+                    ),
+                    "warnings": _load_json(
+                        row["warnings_json"]
+                    ),
+                    "confidence": row["confidence"],
+                    "provider_warning": row["provider_warning"],
+                    "redactions_applied": row["redactions_applied"],
+                    "generated_at": _datetime(row["generated_at"]),
                 }
             )
             for row in rows

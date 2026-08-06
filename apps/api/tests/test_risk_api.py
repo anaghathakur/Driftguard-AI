@@ -53,6 +53,7 @@ def test_persisted_risk_list_detail_and_pipeline(client, base_spec, clone):
         "validate_and_normalize_specifications",
         "compare_contracts",
         "classify_risk",
+        "generate_migration_recommendations",
         "persist_results",
     ]
 
