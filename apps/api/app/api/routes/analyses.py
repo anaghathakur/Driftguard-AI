@@ -15,6 +15,7 @@ from fastapi import (
 from apps.api.app.core.dependencies import (
     get_analysis_pipeline_service,
 )
+from apps.api.app.reports.pdf_report import build_analysis_pdf
 from apps.api.app.schemas.analysis import (
     AnalysisDetail,
     AnalysisListItem,
@@ -25,9 +26,13 @@ from apps.api.app.schemas.comparison import ApiChange
 from apps.api.app.schemas.migration import (
     MigrationRecommendation,
 )
+from apps.api.app.schemas.report import AnalysisReport
 from apps.api.app.schemas.risk import RiskPrediction
 from apps.api.app.services.analysis_pipeline import (
     AnalysisPipelineService,
+)
+from apps.api.app.services.report_service import (
+    build_analysis_report,
 )
 
 router = APIRouter(
@@ -157,6 +162,45 @@ def get_analysis_migration(
     return service.get_migration_recommendation(
         analysis_id,
         change_id,
+    )
+
+
+@router.get(
+    "/{analysis_id}/report",
+    response_model=AnalysisReport,
+)
+def get_analysis_report(
+    analysis_id: str,
+    service: AnalysisService,
+) -> AnalysisReport:
+    return build_analysis_report(
+        service,
+        analysis_id,
+    )
+
+
+@router.get(
+    "/{analysis_id}/report.pdf",
+)
+def get_analysis_pdf_report(
+    analysis_id: str,
+    service: AnalysisService,
+) -> Response:
+    report = build_analysis_report(
+        service,
+        analysis_id,
+    )
+    pdf_bytes = build_analysis_pdf(report)
+    filename = f"driftguard-analysis-{analysis_id}.pdf"
+
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": (
+                f'attachment; filename="{filename}"'
+            )
+        },
     )
 
 

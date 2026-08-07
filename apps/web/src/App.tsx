@@ -10,6 +10,8 @@ import {
   getAnalyses,
   getAnalysisChanges,
   getAnalysisMatches,
+  getAnalysisPdf,
+  getAnalysisReport,
   getMigrationProviderStatus,
   getMigrationRecommendations,
   getRiskPredictions,
@@ -902,6 +904,86 @@ function AnalysisResultPanel({
       ? result.data.impact_summary
       : null;
 
+  const [isDownloadingReport, setIsDownloadingReport] =
+    useState(false);
+  const [isDownloadingPdf, setIsDownloadingPdf] =
+    useState(false);
+  const [reportError, setReportError] =
+    useState<string | null>(null);
+
+  async function handleDownloadReport() {
+    if (!analysisId || isDownloadingReport) {
+      return;
+    }
+
+    setIsDownloadingReport(true);
+    setReportError(null);
+
+    try {
+      const report =
+        await getAnalysisReport(analysisId);
+      const json = JSON.stringify(
+        report,
+        null,
+        2,
+      );
+      const blob = new Blob([json], {
+        type: "application/json",
+      });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+
+      link.href = url;
+      link.download =
+        `driftguard-analysis-${analysisId}.json`;
+
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+    } catch (error) {
+      setReportError(
+        error instanceof Error
+          ? error.message
+          : "The report could not be downloaded.",
+      );
+    } finally {
+      setIsDownloadingReport(false);
+    }
+  }
+
+  async function handleDownloadPdf() {
+    if (!analysisId || isDownloadingPdf) {
+      return;
+    }
+
+    setIsDownloadingPdf(true);
+    setReportError(null);
+
+    try {
+      const blob = await getAnalysisPdf(analysisId);
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+
+      link.href = url;
+      link.download =
+        `driftguard-analysis-${analysisId}.pdf`;
+
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+    } catch (error) {
+      setReportError(
+        error instanceof Error
+          ? error.message
+          : "The PDF report could not be downloaded.",
+      );
+    } finally {
+      setIsDownloadingPdf(false);
+    }
+  }
+
   return (
     <section
       id="analysis-result"
@@ -920,11 +1002,41 @@ function AnalysisResultPanel({
         </div>
 
         {analysisId && (
-          <code className="max-w-full truncate rounded-lg border border-white/10 bg-black/25 px-3 py-2 text-xs text-slate-400">
-            {analysisId}
-          </code>
+          <div className="flex max-w-full flex-col gap-2 sm:flex-row sm:items-center">
+            <button
+              type="button"
+              onClick={handleDownloadReport}
+              disabled={isDownloadingReport}
+              className="rounded-lg border border-cyan-400/30 bg-cyan-400/10 px-4 py-2 text-sm font-semibold text-cyan-100 transition hover:bg-cyan-400/20 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {isDownloadingReport
+                ? "Preparing report..."
+                : "Download JSON report"}
+            </button>
+
+            <button
+              type="button"
+              onClick={handleDownloadPdf}
+              disabled={isDownloadingPdf}
+              className="rounded-lg border border-violet-400/30 bg-violet-400/10 px-4 py-2 text-sm font-semibold text-violet-100 transition hover:bg-violet-400/20 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {isDownloadingPdf
+                ? "Preparing PDF..."
+                : "Download PDF report"}
+            </button>
+
+            <code className="max-w-full truncate rounded-lg border border-white/10 bg-black/25 px-3 py-2 text-xs text-slate-400">
+              {analysisId}
+            </code>
+          </div>
         )}
       </div>
+
+      {reportError && (
+        <div className="mt-5 rounded-xl border border-rose-400/20 bg-rose-400/10 p-4 text-sm text-rose-100">
+          Report download failed: {reportError}
+        </div>
+      )}
 
       <div className="mt-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <ResultMetric

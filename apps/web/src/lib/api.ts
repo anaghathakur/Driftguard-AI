@@ -144,6 +144,29 @@ export type MigrationRecommendation = {
   generated_at: string;
 };
 
+export type AnalysisReportSummary = {
+  total_changes: number;
+  breaking_changes: number;
+  potentially_breaking_changes: number;
+  non_breaking_changes: number;
+  repository_matches: number;
+  impacted_files: number;
+  risk_predictions: number;
+  migration_recommendations: number;
+};
+
+export type AnalysisReport = {
+  report_version: string;
+  generated_at: string;
+  analysis: Record<string, unknown>;
+  summary: AnalysisReportSummary;
+  changes: ApiChange[];
+  matches: PersistedMatch[];
+  risks: RiskPrediction[];
+  migrations: MigrationRecommendation[];
+  pipeline: Array<Record<string, unknown>>;
+};
+
 export async function getMigrationProviderStatus(): Promise<MigrationProviderStatus> {
   return requestJson<MigrationProviderStatus>(
     "/api/v1/migration/provider",
@@ -226,6 +249,28 @@ export async function getMigrationRecommendations(
   return requestJson<MigrationRecommendation[]>(
     `/api/v1/analyses/${analysisId}/migrations`,
   );
+}
+
+export async function getAnalysisReport(
+  analysisId: string,
+): Promise<AnalysisReport> {
+  return requestJson<AnalysisReport>(
+    `/api/v1/analyses/${analysisId}/report`,
+  );
+}
+
+export async function getAnalysisPdf(
+  analysisId: string,
+): Promise<Blob> {
+  const response = await fetch(
+    `${API_BASE_URL}/api/v1/analyses/${analysisId}/report.pdf`,
+  );
+
+  if (!response.ok) {
+    throw new Error(await getErrorMessage(response));
+  }
+
+  return response.blob();
 }
 
 async function requestJson<T>(

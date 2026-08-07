@@ -16,6 +16,7 @@ dependencies = [
   "PyYAML>=6.0.2,<7.0",
   "scikit-learn>=1.9,<1.10",
   "uvicorn[standard]>=0.35,<1.0",
+  "reportlab>=4.2,<5.0",
 ]
 
 [project.optional-dependencies]
