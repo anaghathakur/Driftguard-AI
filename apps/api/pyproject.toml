@@ -9,14 +9,15 @@ description = "DriftGuard AI API contract comparison service"
 requires-python = ">=3.11"
 dependencies = [
   "fastapi>=0.116,<1.0",
+  "google-cloud-firestore>=2.28,<3.0",
   "joblib>=1.5,<1.6",
   "numpy>=2.4,<2.5",
   "pydantic>=2.11,<3.0",
   "python-multipart>=0.0.20,<1.0",
   "PyYAML>=6.0.2,<7.0",
+  "reportlab>=4.2,<5.0",
   "scikit-learn>=1.9,<1.10",
   "uvicorn[standard]>=0.35,<1.0",
-  "reportlab>=4.2,<5.0",
 ]
 
 [project.optional-dependencies]

@@ -8,6 +8,9 @@ from typing import Annotated
 from fastapi import Depends
 
 from apps.api.app.core.config import settings
+from apps.api.app.infrastructure.firestore_analysis_repository import (
+    FirestoreAnalysisRepository,
+)
 from apps.api.app.infrastructure.sqlite_analysis_repository import (
     SQLiteAnalysisRepository,
 )
@@ -29,13 +32,26 @@ from apps.api.app.services.analysis_pipeline import (
 
 
 @lru_cache
-def get_default_analysis_repository() -> SQLiteAnalysisRepository:
-    repository = SQLiteAnalysisRepository(
-        settings.database_path
-    )
-    repository.initialize()
+def get_default_analysis_repository() -> AnalysisRepository:
+    if settings.storage_backend == "sqlite":
+        repository: AnalysisRepository = SQLiteAnalysisRepository(
+            settings.database_path
+        )
+        repository.initialize()
+        return repository
 
-    return repository
+    if settings.storage_backend == "firestore":
+        repository = FirestoreAnalysisRepository(
+            project_id=settings.firestore_project_id or None,
+            database_id=settings.firestore_database_id,
+        )
+        repository.initialize()
+        return repository
+
+    raise RuntimeError(
+        "DRIFTGUARD_STORAGE_BACKEND must be either "
+        "'sqlite' or 'firestore'"
+    )
 
 
 def get_analysis_repository() -> AnalysisRepository:
@@ -64,10 +80,8 @@ def get_migration_provider() -> MigrationRecommendationProvider:
         return MockMigrationRecommendationProvider()
 
     raise RuntimeError(
-        
-            "DRIFTGUARD_AI_PROVIDER must be either "
-            "'mock' or 'gemini'"
-        
+        "DRIFTGUARD_AI_PROVIDER must be either "
+        "'mock' or 'gemini'"
     )
 
 

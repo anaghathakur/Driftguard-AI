@@ -83,6 +83,21 @@ class Settings:
     app_name: str = "DriftGuard AI"
     api_prefix: str = "/api/v1"
 
+    storage_backend: str = os.getenv(
+        "DRIFTGUARD_STORAGE_BACKEND",
+        "sqlite",
+    ).strip().lower()
+
+    firestore_project_id: str = os.getenv(
+        "DRIFTGUARD_FIRESTORE_PROJECT_ID",
+        "",
+    ).strip()
+
+    firestore_database_id: str = os.getenv(
+        "DRIFTGUARD_FIRESTORE_DATABASE_ID",
+        "(default)",
+    ).strip()
+
     database_path: str = os.getenv(
         "DRIFTGUARD_DATABASE_PATH",
         "data/driftguard.sqlite3",
