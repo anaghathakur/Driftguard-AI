@@ -26,6 +26,7 @@ import {
   type RepositoryMatch,
   type RiskPrediction,
 } from "./lib/api";
+import { MonitorPanel } from "./MonitorPanel";
 
 type AnalysisMode = "comparison" | "impact";
 type RepositorySourceMode = "upload" | "github";
@@ -320,6 +321,26 @@ function App() {
     }
   }
 
+  async function handleViewAnalysis(analysisId: string) {
+    try {
+      const currentHistory = await getAnalyses();
+      setHistory(currentHistory);
+      const item = currentHistory.find(
+        (analysis) => analysis.analysis_id === analysisId,
+      );
+      if (!item) {
+        throw new Error("The monitor analysis could not be found in history.");
+      }
+      await handleOpenAnalysis(item);
+    } catch (error) {
+      setHistoryError(
+        error instanceof Error
+          ? error.message
+          : "The monitor analysis could not be opened.",
+      );
+    }
+  }
+
   const comparison =
     analysisResult?.mode === "comparison"
       ? analysisResult.data
@@ -578,6 +599,12 @@ function App() {
             insightError={insightError}
           />
         )}
+
+        <MonitorPanel
+          onViewAnalysis={(monitorAnalysisId) =>
+            void handleViewAnalysis(monitorAnalysisId)
+          }
+        />
 
         <RecentAnalyses
           analyses={history}

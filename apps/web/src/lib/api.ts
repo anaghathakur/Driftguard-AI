@@ -167,6 +167,56 @@ export type AnalysisReport = {
   pipeline: Array<Record<string, unknown>>;
 };
 
+export type MonitorCheckStatus =
+  | "checking"
+  | "unchanged"
+  | "changed"
+  | "failed";
+
+export type ApiMonitor = {
+  monitor_id: string;
+  name: string;
+  specification_url: string;
+  repository_url: string;
+  repository_ref: string | null;
+  check_interval_minutes: number;
+  enabled: boolean;
+  baseline_filename: string;
+  baseline_sha256: string;
+  baseline_observed_at: string;
+  created_at: string;
+  updated_at: string;
+  last_checked_at: string | null;
+  last_changed_at: string | null;
+  last_successful_analysis_id: string | null;
+  last_check_status: MonitorCheckStatus | null;
+  last_error_code: string | null;
+  last_error_message: string | null;
+};
+
+export type MonitorCheck = {
+  check_id: string;
+  monitor_id: string;
+  status: MonitorCheckStatus;
+  checked_at: string;
+  completed_at: string | null;
+  duration_ms: number | null;
+  previous_spec_hash: string;
+  observed_spec_hash: string | null;
+  analysis_id: string | null;
+  error_code: string | null;
+  error_message: string | null;
+};
+
+export type CreateMonitorInput = {
+  name: string;
+  specification_url: string;
+  repository_url: string;
+  repository_ref?: string;
+  check_interval_minutes: number;
+  enabled: boolean;
+};
+
 export async function getMigrationProviderStatus(): Promise<MigrationProviderStatus> {
   return requestJson<MigrationProviderStatus>(
     "/api/v1/migration/provider",
@@ -296,6 +346,63 @@ export async function getAnalysisPdf(
   }
 
   return response.blob();
+}
+
+export async function getMonitors(): Promise<ApiMonitor[]> {
+  return requestJson<ApiMonitor[]>("/api/v1/monitors");
+}
+
+export async function createMonitor(
+  input: CreateMonitorInput,
+): Promise<ApiMonitor> {
+  return requestJson<ApiMonitor>("/api/v1/monitors", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+}
+
+export async function updateMonitor(
+  monitorId: string,
+  input: Partial<CreateMonitorInput>,
+): Promise<ApiMonitor> {
+  return requestJson<ApiMonitor>(
+    `/api/v1/monitors/${monitorId}`,
+    {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input),
+    },
+  );
+}
+
+export async function deleteMonitor(
+  monitorId: string,
+): Promise<void> {
+  const response = await fetch(
+    `${API_BASE_URL}/api/v1/monitors/${monitorId}`,
+    { method: "DELETE" },
+  );
+  if (!response.ok) {
+    throw new Error(await getErrorMessage(response));
+  }
+}
+
+export async function checkMonitor(
+  monitorId: string,
+): Promise<MonitorCheck> {
+  return requestJson<MonitorCheck>(
+    `/api/v1/monitors/${monitorId}/check`,
+    { method: "POST" },
+  );
+}
+
+export async function getMonitorChecks(
+  monitorId: string,
+): Promise<MonitorCheck[]> {
+  return requestJson<MonitorCheck[]>(
+    `/api/v1/monitors/${monitorId}/checks`,
+  );
 }
 
 async function requestJson<T>(

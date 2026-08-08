@@ -17,6 +17,9 @@ from apps.api.app.api.routes.impact import (
 from apps.api.app.api.routes.migration import (
     router as migration_router,
 )
+from apps.api.app.api.routes.monitors import (
+    router as monitors_router,
+)
 from apps.api.app.api.routes.risk import (
     router as risk_router,
 )
@@ -26,6 +29,8 @@ from apps.api.app.api.routes.specifications import (
 from apps.api.app.core.config import settings
 from apps.api.app.core.dependencies import (
     get_default_analysis_repository,
+    get_default_monitor_repository,
+    get_monitor_scheduler,
 )
 from apps.api.app.core.exceptions import (
     register_exception_handlers,
@@ -35,7 +40,13 @@ from apps.api.app.core.exceptions import (
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     get_default_analysis_repository()
-    yield
+    get_default_monitor_repository()
+    scheduler = get_monitor_scheduler()
+    scheduler.start()
+    try:
+        yield
+    finally:
+        await scheduler.stop()
 
 
 def create_app() -> FastAPI:
@@ -81,6 +92,10 @@ def create_app() -> FastAPI:
     )
     app.include_router(
         migration_router,
+        prefix=settings.api_prefix,
+    )
+    app.include_router(
+        monitors_router,
         prefix=settings.api_prefix,
     )
 

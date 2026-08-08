@@ -78,6 +78,18 @@ def _positive_float(
     return value
 
 
+def _boolean(name: str, default: bool) -> bool:
+    raw_value = os.getenv(name)
+    if raw_value is None:
+        return default
+    normalized = raw_value.strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    raise RuntimeError(f"{name} must be a boolean")
+
+
 @dataclass(frozen=True, slots=True)
 class Settings:
     app_name: str = "DriftGuard AI"
@@ -136,6 +148,26 @@ class Settings:
     github_timeout_seconds: float = _positive_float(
         "DRIFTGUARD_GITHUB_TIMEOUT_SECONDS",
         20.0,
+    )
+
+    remote_spec_timeout_seconds: float = _positive_float(
+        "DRIFTGUARD_REMOTE_SPEC_TIMEOUT_SECONDS",
+        20.0,
+    )
+
+    remote_spec_max_redirects: int = _positive_int(
+        "DRIFTGUARD_REMOTE_SPEC_MAX_REDIRECTS",
+        3,
+    )
+
+    monitor_scheduler_enabled: bool = _boolean(
+        "DRIFTGUARD_MONITOR_SCHEDULER_ENABLED",
+        False,
+    )
+
+    monitor_poll_seconds: float = _positive_float(
+        "DRIFTGUARD_MONITOR_POLL_SECONDS",
+        30.0,
     )
 
     ai_max_retries: int = _non_negative_int(

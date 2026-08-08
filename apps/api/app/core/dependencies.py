@@ -11,8 +11,14 @@ from apps.api.app.core.config import settings
 from apps.api.app.infrastructure.firestore_analysis_repository import (
     FirestoreAnalysisRepository,
 )
+from apps.api.app.infrastructure.firestore_monitor_repository import (
+    FirestoreMonitorRepository,
+)
 from apps.api.app.infrastructure.sqlite_analysis_repository import (
     SQLiteAnalysisRepository,
+)
+from apps.api.app.infrastructure.sqlite_monitor_repository import (
+    SQLiteMonitorRepository,
 )
 from apps.api.app.migration.provider import (
     GeminiMigrationRecommendationProvider,
@@ -22,9 +28,13 @@ from apps.api.app.migration.provider import (
 from apps.api.app.migration.service import (
     MigrationRecommendationService,
 )
+from apps.api.app.monitoring.scheduler import MonitorScheduler
+from apps.api.app.monitoring.service import ApiMonitorService, MonitorCheckService
+from apps.api.app.monitoring.specification_source import OpenApiSpecificationSource
 from apps.api.app.ports.analysis_repository import (
     AnalysisRepository,
 )
+from apps.api.app.ports.monitor_repository import ApiMonitorRepository
 from apps.api.app.repository.github_source import (
     GitHubRepositorySource,
 )
@@ -59,6 +69,31 @@ def get_default_analysis_repository() -> AnalysisRepository:
 
 def get_analysis_repository() -> AnalysisRepository:
     return get_default_analysis_repository()
+
+
+@lru_cache
+def get_default_monitor_repository() -> ApiMonitorRepository:
+    if settings.storage_backend == "sqlite":
+        repository: ApiMonitorRepository = SQLiteMonitorRepository(
+            settings.database_path
+        )
+        repository.initialize()
+        return repository
+    if settings.storage_backend == "firestore":
+        repository = FirestoreMonitorRepository(
+            project_id=settings.firestore_project_id or None,
+            database_id=settings.firestore_database_id,
+        )
+        repository.initialize()
+        return repository
+    raise RuntimeError(
+        "DRIFTGUARD_STORAGE_BACKEND must be either "
+        "'sqlite' or 'firestore'"
+    )
+
+
+def get_monitor_repository() -> ApiMonitorRepository:
+    return get_default_monitor_repository()
 
 
 @lru_cache
@@ -124,3 +159,64 @@ def get_analysis_pipeline_service(
 
 def get_github_repository_source() -> GitHubRepositorySource:
     return GitHubRepositorySource()
+
+
+def get_openapi_specification_source() -> OpenApiSpecificationSource:
+    return OpenApiSpecificationSource()
+
+
+def get_api_monitor_service(
+    repository: Annotated[ApiMonitorRepository, Depends(get_monitor_repository)],
+    specification_source: Annotated[
+        OpenApiSpecificationSource,
+        Depends(get_openapi_specification_source),
+    ],
+) -> ApiMonitorService:
+    return ApiMonitorService(repository, specification_source)
+
+
+def get_monitor_check_service(
+    repository: Annotated[ApiMonitorRepository, Depends(get_monitor_repository)],
+    specification_source: Annotated[
+        OpenApiSpecificationSource,
+        Depends(get_openapi_specification_source),
+    ],
+    github_source: Annotated[
+        GitHubRepositorySource,
+        Depends(get_github_repository_source),
+    ],
+    analysis_pipeline: Annotated[
+        AnalysisPipelineService,
+        Depends(get_analysis_pipeline_service),
+    ],
+) -> MonitorCheckService:
+    return MonitorCheckService(
+        repository,
+        specification_source,
+        github_source,
+        analysis_pipeline,
+    )
+
+
+@lru_cache
+def get_default_monitor_check_service() -> MonitorCheckService:
+    return MonitorCheckService(
+        get_default_monitor_repository(),
+        OpenApiSpecificationSource(),
+        GitHubRepositorySource(),
+        AnalysisPipelineService(
+            get_default_analysis_repository(),
+            get_risk_classifier(),
+            get_migration_recommendation_service(),
+        ),
+    )
+
+
+@lru_cache
+def get_monitor_scheduler() -> MonitorScheduler:
+    return MonitorScheduler(
+        get_default_monitor_repository(),
+        get_default_monitor_check_service(),
+        enabled=settings.monitor_scheduler_enabled,
+        poll_seconds=settings.monitor_poll_seconds,
+    )

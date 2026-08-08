@@ -5,37 +5,66 @@ classifies change risk with explainable local models, and keeps a local analysis
 
 ## Current milestone
 
-Milestone 4 adds explainable local risk classification to the durable analysis pipeline from
-Milestone 3. It includes:
+Phase 10 adds automatic API change monitoring to the existing OpenAPI comparison, public GitHub
+impact analysis, ML risk, migration guidance, persistence, reporting, and React dashboard.
 
-- safe extension and size validation;
-- OpenAPI structure validation with local `$ref` resolution;
-- normalized operations, parameters, request fields, responses, authentication, enums, and descriptions;
-- deterministic change classification independent of an AI provider;
-- structured FastAPI error responses;
-- in-memory ZIP scanning with path traversal, link, encryption, archive size,
-  decompressed size, file count, per-file size, and compression-ratio defenses;
-- source allowlisting and generated/dependency directory exclusions;
-- deterministic matching by OpenAPI `operationId`, path template, and HTTP method;
-- local SQLite persistence behind an application repository interface;
-- injected persistence and pipeline services;
-- UTC analysis, pipeline-stage, completion, and failure timestamps;
-- SHA-256 file hashes and byte-level duplicate-request fingerprints;
-- transactional result writes and foreign-key cascade deletion;
-- safe persisted failures without tracebacks, archives, or complete source files;
-- analysis history, detail, change, match, pipeline, and deletion endpoints;
-- deterministic per-change feature generation with a versioned feature schema;
-- a transparent rule-based risk score with human-readable reasons;
-- a reproducible, fixed-seed synthetic training dataset generator;
-- held-out Logistic Regression and Random Forest comparison;
-- a versioned, checksum-validated Joblib model and JSON metadata;
-- model probabilities and local feature drivers alongside the rule baseline;
-- safe deterministic fallback when the artifact is missing, invalid, or incompatible;
-- transactional risk-prediction persistence and risk-query endpoints;
-- a recorded `classify_risk` pipeline stage;
-- focused unit and API tests.
+An API monitor stores a bounded OpenAPI baseline plus its SHA-256 hash, the public GitHub
+repository to inspect, and a check interval. Creation validates and stores the current contract as
+the baseline without running an impact analysis. Later checks fetch and validate the URL again:
 
-Gemini, BigQuery, Docker, automatic code fixes, and the web dashboard are intentionally not implemented yet.
+- identical bytes record `unchanged` and skip GitHub, ML, and migration work;
+- changed bytes run the existing GitHub impact pipeline and link the resulting analysis;
+- a successful changed check atomically advances the baseline;
+- a failed check records a safe error and retains the old baseline for retry.
+
+Repository archives and source files are never persisted or executed. Baseline OpenAPI bytes are
+persisted because deterministic future comparison requires the original bounded document. Treat
+monitor storage as sensitive if upstream contracts contain confidential examples or descriptions.
+
+## Monitor API
+
+- `POST /api/v1/monitors` creates a monitor and establishes its baseline.
+- `GET /api/v1/monitors` lists monitor status.
+- `GET /api/v1/monitors/{monitor_id}` returns monitor details.
+- `PATCH /api/v1/monitors/{monitor_id}` updates configuration; changing the specification URL
+  establishes a fresh baseline without analysis.
+- `DELETE /api/v1/monitors/{monitor_id}` deletes the monitor and check history.
+- `POST /api/v1/monitors/{monitor_id}/check` checks immediately.
+- `GET /api/v1/monitors/{monitor_id}/checks` returns newest-first check history.
+
+The dashboard's **API Monitors** area supports creation, enable/disable, Check now, history,
+deletion, and opening the latest successful analysis.
+
+## Remote OpenAPI security
+
+Remote specifications are HTTPS-only, bounded by `DRIFTGUARD_MAX_SPEC_FILE_BYTES`, fetched with a
+timeout and explicit redirect limit, and parsed through the existing OpenAPI validator. URLs with
+credentials, ports, fragments, localhost/private/link-local/multicast/reserved destinations, and
+cloud metadata destinations are rejected. Every redirect is revalidated and automatic redirect
+following is disabled.
+
+DNS is validated before each request, but the HTTP client subsequently performs its own DNS
+resolution. A hostile authoritative DNS server could theoretically rebind between those steps.
+Production deployment should add network-level egress controls or a pinned-address transport;
+this MVP does not claim perfect DNS-rebinding resistance.
+
+## Automatic scheduler
+
+The zero-cost scheduler runs inside the FastAPI process. It checks enabled monitors whose interval
+has elapsed, skips disabled/not-yet-due monitors, prevents overlapping checks within the process,
+isolates monitor failures, and stops cleanly during application shutdown. It is disabled by
+default so tests and local API startup are deterministic.
+
+Enable it with:
+
+```text
+DRIFTGUARD_MONITOR_SCHEDULER_ENABLED=true
+DRIFTGUARD_MONITOR_POLL_SECONDS=30
+```
+
+This scheduler is process-local. Multiple API workers can schedule the same monitor, so use one
+worker when it is enabled. A future external scheduler/worker can call the same monitor check
+service without changing the analysis pipeline.
 
 ## Run locally
 
@@ -49,6 +78,10 @@ python -m venv .venv
 
 The database is created automatically at `data/driftguard.sqlite3`. Override the location
 with `DRIFTGUARD_DATABASE_PATH`; all supported settings are listed in `.env.example`.
+
+For zero-cost local monitoring, leave the mock migration provider enabled, create a monitor in the
+dashboard, and either use **Check now** or enable the process-local scheduler. No paid queue,
+Redis, cloud scheduler, or GitHub service is required.
 
 Open `http://127.0.0.1:8000/docs` and use `POST /api/v1/specifications/compare`, or run the included payment demo:
 
@@ -131,21 +164,22 @@ only; they are not evidence of production accuracy or business impact.
 
 ## Architecture direction
 
-The MVP is a modular monolith. FastAPI routes receive the analysis pipeline through dependency
-injection. The pipeline uses an `AnalysisRepository` port; SQLite is the current local adapter.
-Deterministic contract and impact logic remains independent of persistence and external providers.
+The MVP is a modular monolith. FastAPI routes receive analysis and monitoring services through
+dependency injection. Separate repository ports have SQLite local-default and Firestore adapters.
+Deterministic contract and impact logic remains independent of scheduling and repository
+acquisition.
 
-The Milestone 4 flow is:
+The Phase 10 monitoring flow is:
 
 ```text
-uploads -> SHA-256 hashes + request fingerprint -> create or find analysis
-       -> recorded validation/comparison/scan/match stages
-       -> deterministic features -> model prediction or rule fallback
-       -> transactional changes + limited matches + risk predictions + metadata write
-       -> stored response or safe persisted failure
+create monitor -> secure OpenAPI fetch -> validate -> persist bounded V1 baseline
+scheduled/manual check -> secure fetch -> compare SHA-256
+  unchanged -> record check only
+  changed -> existing GitHub impact pipeline -> persist analysis -> atomically store check + V2
+  failed -> safe check history error -> retain V1 for retry
 ```
 
-SQLite contains six related application tables:
+SQLite contains the existing analysis tables plus two monitoring tables:
 
 - `analyses` owns metadata, hashes, fingerprints, summaries, and lifecycle timestamps;
 - `analysis_changes` belongs to an analysis;
@@ -154,8 +188,11 @@ SQLite contains six related application tables:
   model provenance, and probabilities;
 - `pipeline_stages` belongs to an analysis;
 - `analysis_failures` belongs to an analysis.
+- `api_monitors` stores configuration, bounded baseline content, hashes, and latest status;
+- `monitor_checks` stores newest-first unchanged, changed, and failed check history.
 
-All child rows are deleted through foreign-key cascades when an analysis is deleted.
+Firestore stores the same monitor records and splits bounded baseline bytes into subdocuments to
+stay below its per-document size limit. Repository archives remain transient on both backends.
 
 ## Current limitations
 
@@ -164,6 +201,11 @@ All child rows are deleted through foreign-key cascades when an analysis is dele
 - Schema comparison currently focuses on object properties relevant to the MVP, including nested properties represented as dotted paths.
 - Repository input supports uploaded ZIPs and public GitHub repositories. Private repositories,
   GitHub authentication/App installation, and remote Git cloning are not included.
+- Remote OpenAPI monitoring requires a publicly reachable HTTPS endpoint; private/internal API
+  endpoints are intentionally rejected by SSRF controls.
+- The process-local scheduler is suitable for a single-worker MVP, not distributed scheduling.
+- Pre-request DNS validation has a residual DNS-rebinding window; production should also enforce
+  network-level egress restrictions.
 - Matching is deterministic and lexical. It recognizes literal/templated paths, nearby HTTP
   methods, and operation IDs, but does not build language ASTs or resolve runtime URL construction.
 - Server route declarations can look like client usage and may be reported as matches.
@@ -180,7 +222,7 @@ All child rows are deleted through foreign-key cascades when an analysis is dele
 - Analysis execution is synchronous; SQLite is appropriate for this local milestone, not a
   horizontally scaled deployment.
 - Risk-model labels are synthetic and encode the initial engineering risk policy. Real-world
-  calibration, drift monitoring, and outcome-based validation are not implemented yet.
+  calibration and outcome-based validation are not implemented yet.
 - Historical analyses created before Milestone 4 are retained but are not backfilled; their risk
   endpoints return an empty list until the inputs are resubmitted under the versioned pipeline.
 - Joblib artifacts can execute Python during loading. DriftGuard loads only the configured local

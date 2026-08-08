@@ -1,0 +1,1 @@
+"""Automatic OpenAPI monitoring components."""
