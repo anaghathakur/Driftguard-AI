@@ -5,6 +5,7 @@ import {
 } from "react";
 
 import {
+  analyzeGitHubRepositoryImpact,
   analyzeRepositoryImpact,
   compareSpecifications,
   getAnalyses,
@@ -27,6 +28,7 @@ import {
 } from "./lib/api";
 
 type AnalysisMode = "comparison" | "impact";
+type RepositorySourceMode = "upload" | "github";
 
 type AnalysisResult =
   | {
@@ -47,6 +49,12 @@ function App() {
     useState<File | null>(null);
   const [repository, setRepository] =
     useState<File | null>(null);
+  const [repositorySource, setRepositorySource] =
+    useState<RepositorySourceMode>("upload");
+  const [repositoryUrl, setRepositoryUrl] =
+    useState("");
+  const [repositoryRef, setRepositoryRef] =
+    useState("");
 
   const [providerStatus, setProviderStatus] =
     useState<MigrationProviderStatus | null>(null);
@@ -100,7 +108,10 @@ function App() {
     !isAnalyzing &&
     oldSpec !== null &&
     newSpec !== null &&
-    (mode === "comparison" || repository !== null);
+    (mode === "comparison" ||
+      (repositorySource === "upload"
+        ? repository !== null
+        : repositoryUrl.trim().length > 0));
 
   useEffect(() => {
     let active = true;
@@ -169,9 +180,24 @@ function App() {
       return;
     }
 
-    if (mode === "impact" && !repository) {
+    if (
+      mode === "impact" &&
+      repositorySource === "upload" &&
+      !repository
+    ) {
       setAnalysisError(
         "Select a repository ZIP file for impact analysis.",
+      );
+      return;
+    }
+
+    if (
+      mode === "impact" &&
+      repositorySource === "github" &&
+      !repositoryUrl.trim()
+    ) {
+      setAnalysisError(
+        "Enter a public GitHub repository URL for impact analysis.",
       );
       return;
     }
@@ -198,11 +224,19 @@ function App() {
         await loadInsights(data.analysis_id);
         void loadHistory();
       } else {
-        const data = await analyzeRepositoryImpact(
-          oldSpec,
-          newSpec,
-          repository as File,
-        );
+        const data =
+          repositorySource === "upload"
+            ? await analyzeRepositoryImpact(
+                oldSpec,
+                newSpec,
+                repository as File,
+              )
+            : await analyzeGitHubRepositoryImpact(
+                oldSpec,
+                newSpec,
+                repositoryUrl,
+                repositoryRef,
+              );
 
         setAnalysisResult({
           mode: "impact",
@@ -353,6 +387,7 @@ function App() {
             <div className="mb-7 grid grid-cols-2 gap-3 rounded-xl border border-white/5 bg-black/25 p-1.5">
               <ModeButton
                 active={mode === "comparison"}
+                disabled={isAnalyzing}
                 onClick={() =>
                   setMode("comparison")
                 }
@@ -362,6 +397,7 @@ function App() {
 
               <ModeButton
                 active={mode === "impact"}
+                disabled={isAnalyzing}
                 onClick={() => setMode("impact")}
               >
                 Repository impact
@@ -375,6 +411,7 @@ function App() {
                 accept=".json,.yaml,.yml"
                 file={oldSpec}
                 onChange={setOldSpec}
+                disabled={isAnalyzing}
               />
 
               <FileField
@@ -383,18 +420,92 @@ function App() {
                 accept=".json,.yaml,.yml"
                 file={newSpec}
                 onChange={setNewSpec}
+                disabled={isAnalyzing}
               />
             </div>
 
             {mode === "impact" && (
               <div className="mt-5">
-                <FileField
-                  label="Repository archive"
-                  description="Upload the source repository as a ZIP file"
-                  accept=".zip"
-                  file={repository}
-                  onChange={setRepository}
-                />
+                <p className="text-sm font-semibold text-slate-200">
+                  Repository source
+                </p>
+                <div className="mt-3 grid grid-cols-2 gap-3 rounded-xl border border-white/5 bg-black/25 p-1.5">
+                  <ModeButton
+                    active={repositorySource === "upload"}
+                    disabled={isAnalyzing}
+                    onClick={() =>
+                      setRepositorySource("upload")
+                    }
+                  >
+                    Upload ZIP
+                  </ModeButton>
+                  <ModeButton
+                    active={repositorySource === "github"}
+                    disabled={isAnalyzing}
+                    onClick={() =>
+                      setRepositorySource("github")
+                    }
+                  >
+                    GitHub repository
+                  </ModeButton>
+                </div>
+
+                {repositorySource === "upload" ? (
+                  <div className="mt-4">
+                    <FileField
+                      label="Repository archive"
+                      description="Upload the source repository as a ZIP file"
+                      accept=".zip"
+                      file={repository}
+                      onChange={setRepository}
+                      disabled={isAnalyzing}
+                    />
+                  </div>
+                ) : (
+                  <div className="mt-4 grid gap-4 rounded-xl border border-white/10 bg-black/20 p-4 md:grid-cols-2">
+                    <label className="block">
+                      <span className="block text-sm font-semibold text-slate-100">
+                        GitHub repository URL
+                      </span>
+                      <span className="mt-1 block text-xs leading-5 text-slate-500">
+                        Public github.com repositories only
+                      </span>
+                      <input
+                        type="url"
+                        value={repositoryUrl}
+                        onChange={(event) =>
+                          setRepositoryUrl(
+                            event.target.value,
+                          )
+                        }
+                        placeholder="https://github.com/owner/repository"
+                        disabled={isAnalyzing}
+                        className="mt-4 w-full rounded-lg border border-white/10 bg-slate-950/80 px-3 py-2.5 text-sm text-slate-100 outline-none transition placeholder:text-slate-600 focus:border-cyan-400/50 disabled:cursor-not-allowed disabled:opacity-60"
+                      />
+                    </label>
+
+                    <label className="block">
+                      <span className="block text-sm font-semibold text-slate-100">
+                        Branch, tag, or ref
+                      </span>
+                      <span className="mt-1 block text-xs leading-5 text-slate-500">
+                        Optional; defaults to the repository default branch
+                      </span>
+                      <input
+                        type="text"
+                        value={repositoryRef}
+                        onChange={(event) =>
+                          setRepositoryRef(
+                            event.target.value,
+                          )
+                        }
+                        placeholder="main, v2.0.0, or commit SHA"
+                        disabled={isAnalyzing}
+                        className="mt-4 w-full rounded-lg border border-white/10 bg-slate-950/80 px-3 py-2.5 text-sm text-slate-100 outline-none transition placeholder:text-slate-600 focus:border-cyan-400/50 disabled:cursor-not-allowed disabled:opacity-60"
+                      />
+                    </label>
+                  </div>
+                )}
               </div>
             )}
 
@@ -406,7 +517,7 @@ function App() {
 
             <div className="mt-7 flex flex-col gap-3 border-t border-white/10 pt-6 sm:flex-row sm:items-center sm:justify-between">
               <p className="text-sm text-slate-500">
-                Files are processed locally by your
+                Inputs are processed safely by your
                 DriftGuard backend.
               </p>
 
@@ -785,12 +896,14 @@ function BackendBadge({
 
 type ModeButtonProps = {
   active: boolean;
+  disabled?: boolean;
   onClick: () => void;
   children: string;
 };
 
 function ModeButton({
   active,
+  disabled = false,
   onClick,
   children,
 }: ModeButtonProps) {
@@ -798,7 +911,9 @@ function ModeButton({
     <button
       type="button"
       onClick={onClick}
-      className={`rounded-lg px-4 py-3 text-sm font-medium transition ${
+      disabled={disabled}
+      aria-pressed={active}
+      className={`rounded-lg px-4 py-3 text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-60 ${
         active
           ? "bg-gradient-to-r from-cyan-400 to-violet-500 text-slate-950 shadow-lg shadow-cyan-500/20"
           : "text-slate-400 hover:bg-white/5 hover:text-white"
@@ -815,6 +930,7 @@ type FileFieldProps = {
   accept: string;
   file: File | null;
   onChange: (file: File | null) => void;
+  disabled?: boolean;
 };
 
 function FileField({
@@ -823,6 +939,7 @@ function FileField({
   accept,
   file,
   onChange,
+  disabled = false,
 }: FileFieldProps) {
   return (
     <label className="block rounded-xl border border-white/10 bg-black/20 p-4 transition hover:border-cyan-400/40 hover:bg-white/[0.03]">
@@ -837,12 +954,13 @@ function FileField({
       <input
         type="file"
         accept={accept}
+        disabled={disabled}
         onChange={(event) =>
           onChange(
             event.target.files?.[0] ?? null,
           )
         }
-        className="mt-4 block w-full text-sm text-slate-400 file:mr-4 file:rounded-lg file:border-0 file:bg-gradient-to-r file:from-cyan-400/15 file:to-violet-500/15 file:px-4 file:py-2 file:text-sm file:font-semibold file:text-cyan-200 hover:file:from-cyan-400/20 hover:file:to-violet-500/20"
+        className="mt-4 block w-full text-sm text-slate-400 file:mr-4 file:rounded-lg file:border-0 file:bg-gradient-to-r file:from-cyan-400/15 file:to-violet-500/15 file:px-4 file:py-2 file:text-sm file:font-semibold file:text-cyan-200 hover:file:from-cyan-400/20 hover:file:to-violet-500/20 disabled:cursor-not-allowed disabled:opacity-60"
       />
 
       {file && (
@@ -1232,7 +1350,7 @@ function SourceMatchesPanel({
           </p>
           <p className="mt-1 text-sm text-slate-400">
             {matches.length === 0
-              ? "No matching API usage was found in the uploaded repository."
+              ? "No matching API usage was found in the repository."
               : `${matches.length} repository match${
                   matches.length === 1 ? "" : "es"
                 } found for this change.`}

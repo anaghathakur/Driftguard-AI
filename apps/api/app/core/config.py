@@ -133,6 +133,11 @@ class Settings:
         20.0,
     )
 
+    github_timeout_seconds: float = _positive_float(
+        "DRIFTGUARD_GITHUB_TIMEOUT_SECONDS",
+        20.0,
+    )
+
     ai_max_retries: int = _non_negative_int(
         "DRIFTGUARD_AI_MAX_RETRIES",
         1,

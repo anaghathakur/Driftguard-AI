@@ -25,6 +25,9 @@ from apps.api.app.migration.service import (
 from apps.api.app.ports.analysis_repository import (
     AnalysisRepository,
 )
+from apps.api.app.repository.github_source import (
+    GitHubRepositorySource,
+)
 from apps.api.app.risk.classifier import RiskClassifier
 from apps.api.app.services.analysis_pipeline import (
     AnalysisPipelineService,
@@ -117,3 +120,7 @@ def get_analysis_pipeline_service(
         risk_classifier,
         migration_service,
     )
+
+
+def get_github_repository_source() -> GitHubRepositorySource:
+    return GitHubRepositorySource()

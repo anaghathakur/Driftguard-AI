@@ -211,6 +211,31 @@ export async function analyzeRepositoryImpact(
   );
 }
 
+export async function analyzeGitHubRepositoryImpact(
+  oldSpec: File,
+  newSpec: File,
+  repositoryUrl: string,
+  ref?: string,
+): Promise<ImpactAnalysisResponse> {
+  const formData = new FormData();
+
+  formData.append("old_spec", oldSpec);
+  formData.append("new_spec", newSpec);
+  formData.append("repository_url", repositoryUrl.trim());
+
+  if (ref?.trim()) {
+    formData.append("ref", ref.trim());
+  }
+
+  return requestJson<ImpactAnalysisResponse>(
+    "/api/v1/impact/analyze/github",
+    {
+      method: "POST",
+      body: formData,
+    },
+  );
+}
+
 export async function getAnalyses(): Promise<
   AnalysisHistoryItem[]
 > {
@@ -294,6 +319,9 @@ async function getErrorMessage(
 ): Promise<string> {
   try {
     const body = (await response.json()) as {
+      error?: {
+        message?: string;
+      };
       detail?:
         | string
         | {
@@ -301,6 +329,10 @@ async function getErrorMessage(
           };
       message?: string;
     };
+
+    if (body.error?.message) {
+      return body.error.message;
+    }
 
     if (typeof body.detail === "string") {
       return body.detail;

@@ -71,6 +71,19 @@ Then use `POST /api/v1/impact/analyze` in Swagger with:
 - `new_spec`: `sample-data/specifications/payments-new.yaml`
 - `repository`: `$env:TEMP\payment-client.zip`
 
+To analyze a public GitHub repository without creating a ZIP, use
+`POST /api/v1/impact/analyze/github` with:
+
+- `old_spec`: `sample-data/specifications/payments-old.yaml`
+- `new_spec`: `sample-data/specifications/payments-new.yaml`
+- `repository_url`: an HTTPS URL such as `https://github.com/owner/repository`
+- `ref`: an optional branch, tag, or commit SHA; omit it to use the default branch
+
+GitHub acquisition accepts only `github.com` repository URLs, validates the archive redirect
+against `codeload.github.com`, and enforces the configured request timeout and archive byte limit.
+The downloaded ZIP remains in memory and passes through the same secure repository scanner as an
+uploaded ZIP.
+
 The response includes `analysis_id` and `duplicate`. Use the ID with:
 
 - `GET /api/v1/analyses`
@@ -149,7 +162,8 @@ All child rows are deleted through foreign-key cascades when an analysis is dele
 - Only OpenAPI 3.x is accepted.
 - Only local JSON Pointer `$ref` values are resolved; remote references are rejected.
 - Schema comparison currently focuses on object properties relevant to the MVP, including nested properties represented as dotted paths.
-- Repository input is ZIP-only; remote Git cloning and provider integrations are not included.
+- Repository input supports uploaded ZIPs and public GitHub repositories. Private repositories,
+  GitHub authentication/App installation, and remote Git cloning are not included.
 - Matching is deterministic and lexical. It recognizes literal/templated paths, nearby HTTP
   methods, and operation IDs, but does not build language ASTs or resolve runtime URL construction.
 - Server route declarations can look like client usage and may be reported as matches.
