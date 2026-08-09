@@ -5,8 +5,57 @@ classifies change risk with explainable local models, and keeps a local analysis
 
 ## Current milestone
 
-Phase 10 adds automatic API change monitoring to the existing OpenAPI comparison, public GitHub
-impact analysis, ML risk, migration guidance, persistence, reporting, and React dashboard.
+Phase 11 adds deeper code impact intelligence to the existing OpenAPI comparison, public GitHub
+impact analysis, monitoring, ML risk, migration guidance, persistence, reporting, and React
+dashboard. Direct lexical matching remains available, while supported repositories also receive
+bounded symbol, import, HTTP-call, and caller analysis.
+
+## Deeper Code Impact Intelligence
+
+DriftGuard performs deterministic static analysis for Python, JavaScript, and TypeScript source
+files. It parses repository text once, indexes functions and methods, resolves local imports and
+safe string expressions, builds a bounded call graph, and propagates API impact through callers.
+For example:
+
+```text
+POST /payments
+  -> payment_client.create_payment   direct API usage, depth 0
+  -> checkout.checkout               wrapper caller, depth 1
+  -> orders.submit_order             transitive caller, depth 2
+```
+
+Direct HTTP recognition covers common `requests`, `httpx`, client/session method calls, `fetch`,
+Axios-style methods, and object-style client requests. Endpoint resolution is intentionally
+limited to literals, local constant references, simple concatenation, and simple f-string/template
+constants. Unknown expressions are not evaluated.
+
+Each deep match retains its source location, language, enclosing symbol, impact depth, confidence,
+and a bounded evidence trace. Exact resolved path plus HTTP method anchors are high confidence;
+deterministically resolved local callers are medium confidence. Import resolution is local and
+precision-oriented: ambiguous same-named functions are not connected.
+
+Unsupported languages, dynamically constructed endpoints, and individual parser failures retain
+the existing lexical matcher. Exact lexical/semantic duplicates are collapsed to the strongest
+evidence, while transitive caller locations remain separate. Static-analysis summary metadata
+reports supported files, parser failures, symbols, resolved call edges, direct anchors, and
+transitive matches.
+
+Repository code is never executed, imported, compiled, tested, or passed to Node/package tooling.
+Only bounded source-text parsing is performed. Phase 11 is not whole-program analysis and does not
+resolve package-manager graphs, runtime dependency injection, reflection, or arbitrary data flow.
+
+Resource limits are configurable:
+
+```text
+DRIFTGUARD_MAX_CODE_SYMBOLS=10000
+DRIFTGUARD_MAX_CODE_GRAPH_EDGES=25000
+DRIFTGUARD_MAX_IMPACT_DEPTH=3
+```
+
+Global symbol/edge/anchor limit violations fail with a controlled error. Per-file parser failures
+are reported and degraded to lexical matching. Cycles are bounded with shortest-depth visitation.
+Identical Phase 11 inputs use pipeline profile `5.0.0`, preventing older shallow analyses from
+being reused as duplicates.
 
 An API monitor stores a bounded OpenAPI baseline plus its SHA-256 hash, the public GitHub
 repository to inspect, and a check interval. Creation validates and stores the current contract as
@@ -169,13 +218,14 @@ dependency injection. Separate repository ports have SQLite local-default and Fi
 Deterministic contract and impact logic remains independent of scheduling and repository
 acquisition.
 
-The Phase 10 monitoring flow is:
+The Phase 11 monitoring flow is:
 
 ```text
 create monitor -> secure OpenAPI fetch -> validate -> persist bounded V1 baseline
 scheduled/manual check -> secure fetch -> compare SHA-256
   unchanged -> record check only
-  changed -> existing GitHub impact pipeline -> persist analysis -> atomically store check + V2
+  changed -> GitHub impact pipeline -> semantic code graph + lexical fallback
+          -> ML + migration -> persist analysis -> atomically store check + V2
   failed -> safe check history error -> retain V1 for retry
 ```
 
@@ -207,7 +257,9 @@ stay below its per-document size limit. Repository archives remain transient on 
 - Pre-request DNS validation has a residual DNS-rebinding window; production should also enforce
   network-level egress restrictions.
 - Matching is deterministic and lexical. It recognizes literal/templated paths, nearby HTTP
-  methods, and operation IDs, but does not build language ASTs or resolve runtime URL construction.
+  methods, and operation IDs for all scanned extensions. Python, JavaScript, and TypeScript add
+  bounded semantic analysis, but runtime URL construction and external package graphs remain
+  unresolved.
 - Server route declarations can look like client usage and may be reported as matches.
 - UTF-8 source files in the configured extension allowlist are scanned; binary, non-UTF-8,
   dependency, generated, oversized, and unsupported files are skipped or rejected as appropriate.

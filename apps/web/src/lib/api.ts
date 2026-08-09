@@ -46,6 +46,25 @@ export type RepositoryScanSummary = {
   scanned_bytes: number;
   skipped_files: number;
   skipped_reasons: Record<string, number>;
+  code_analysis?: {
+    supported_files: number;
+    parser_failures: number;
+    parser_failure_files: string[];
+    symbols_discovered: number;
+    call_edges_resolved: number;
+    direct_api_anchors: number;
+    transitive_matches: number;
+    max_impact_depth: number;
+  } | null;
+};
+
+export type ImpactTraceStep = {
+  file_path: string;
+  symbol: string | null;
+  relation: "direct_api_usage" | "calls";
+  line: number;
+  column: number;
+  evidence: string;
 };
 
 export type ImpactSummary = {
@@ -62,6 +81,11 @@ export type RepositoryMatch = {
   match_kind: string;
   confidence: string;
   evidence: string;
+  symbol?: string | null;
+  language?: string | null;
+  impact_depth?: number;
+  analysis_kind?: "lexical" | "direct" | "wrapper" | "transitive";
+  trace?: ImpactTraceStep[];
 };
 
 export type ChangeImpact = {
@@ -151,6 +175,9 @@ export type AnalysisReportSummary = {
   non_breaking_changes: number;
   repository_matches: number;
   impacted_files: number;
+  direct_matches: number;
+  transitive_matches: number;
+  max_impact_depth: number;
   risk_predictions: number;
   migration_recommendations: number;
 };

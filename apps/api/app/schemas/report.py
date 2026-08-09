@@ -25,6 +25,9 @@ class AnalysisReportSummary(BaseModel):
     non_breaking_changes: int
     repository_matches: int
     impacted_files: int
+    direct_matches: int = 0
+    transitive_matches: int = 0
+    max_impact_depth: int = 0
     risk_predictions: int
     migration_recommendations: int
 

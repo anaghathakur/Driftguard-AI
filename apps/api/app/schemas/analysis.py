@@ -13,7 +13,9 @@ from apps.api.app.domain.analysis import (
 )
 from apps.api.app.schemas.comparison import ComparisonSummary, ContractMetadata
 from apps.api.app.schemas.impact import (
+    ImpactAnalysisKind,
     ImpactSummary,
+    ImpactTraceStep,
     MatchConfidence,
     MatchKind,
     RepositoryScanSummary,
@@ -73,6 +75,11 @@ class PersistedMatchResponse(BaseModel):
     match_kind: MatchKind
     confidence: MatchConfidence
     evidence: str = Field(max_length=240)
+    symbol: str | None = None
+    language: str | None = None
+    impact_depth: int = Field(default=0, ge=0)
+    analysis_kind: ImpactAnalysisKind = ImpactAnalysisKind.LEXICAL
+    trace: list[ImpactTraceStep] = Field(default_factory=list, max_length=10)
 
 
 class PipelineStageResponse(BaseModel):

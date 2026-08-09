@@ -84,6 +84,11 @@ CREATE TABLE IF NOT EXISTS repository_matches (
     match_kind TEXT NOT NULL,
     confidence TEXT NOT NULL,
     evidence TEXT NOT NULL CHECK (length(evidence) <= 240),
+    symbol TEXT,
+    language TEXT,
+    impact_depth INTEGER NOT NULL DEFAULT 0 CHECK (impact_depth >= 0),
+    analysis_kind TEXT NOT NULL DEFAULT 'lexical',
+    trace_json TEXT NOT NULL DEFAULT '[]',
     UNIQUE (analysis_id, change_id, ordinal),
     FOREIGN KEY (analysis_id, change_id)
         REFERENCES analysis_changes(analysis_id, change_id) ON DELETE CASCADE
@@ -210,6 +215,7 @@ class SQLiteAnalysisRepository(AnalysisRepository):
         self.database_path.parent.mkdir(parents=True, exist_ok=True)
         with self._connect() as connection:
             connection.executescript(SCHEMA)
+            _ensure_repository_match_columns(connection)
 
     def create_or_get(self, submission: AnalysisSubmission) -> AnalysisCreation:
         with self._transaction() as connection:
@@ -371,8 +377,10 @@ class SQLiteAnalysisRepository(AnalysisRepository):
                         """
                         INSERT INTO repository_matches (
                             analysis_id, change_id, ordinal, file_path, line,
-                            column_number, match_kind, confidence, evidence
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            column_number, match_kind, confidence, evidence,
+                            symbol, language, impact_depth, analysis_kind,
+                            trace_json
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """,
                         (
                             analysis_id,
@@ -384,6 +392,11 @@ class SQLiteAnalysisRepository(AnalysisRepository):
                             match.match_kind.value,
                             match.confidence.value,
                             redact_secrets(match.evidence[:240])[0][:240],
+                            match.symbol,
+                            match.language,
+                            match.impact_depth,
+                            match.analysis_kind.value,
+                            _safe_trace_json(match.trace),
                         ),
                     )
             for prediction in risk_predictions:
@@ -569,6 +582,11 @@ class SQLiteAnalysisRepository(AnalysisRepository):
                 match_kind=row["match_kind"],
                 confidence=row["confidence"],
                 evidence=row["evidence"],
+                symbol=row["symbol"],
+                language=row["language"],
+                impact_depth=row["impact_depth"],
+                analysis_kind=row["analysis_kind"],
+                trace=tuple(_load_json(row["trace_json"]) or []),
             )
             for row in rows
         ]
@@ -781,3 +799,33 @@ def _model_json(value: Any) -> str | None:
 
 def _load_json(value: str | None) -> Any:
     return json.loads(value) if value is not None else None
+
+
+def _safe_trace_json(trace: list[Any]) -> str:
+    safe: list[dict[str, Any]] = []
+    for step in trace[:10]:
+        data = step.model_dump(mode="json")
+        data["evidence"] = redact_secrets(str(data.get("evidence", ""))[:240])[0][
+            :240
+        ]
+        safe.append(data)
+    return _json(safe)
+
+
+def _ensure_repository_match_columns(connection: sqlite3.Connection) -> None:
+    columns = {
+        row[1]
+        for row in connection.execute("PRAGMA table_info(repository_matches)").fetchall()
+    }
+    additions = {
+        "symbol": "TEXT",
+        "language": "TEXT",
+        "impact_depth": "INTEGER NOT NULL DEFAULT 0",
+        "analysis_kind": "TEXT NOT NULL DEFAULT 'lexical'",
+        "trace_json": "TEXT NOT NULL DEFAULT '[]'",
+    }
+    for name, definition in additions.items():
+        if name not in columns:
+            connection.execute(
+                f"ALTER TABLE repository_matches ADD COLUMN {name} {definition}"
+            )

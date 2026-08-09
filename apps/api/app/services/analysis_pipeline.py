@@ -56,7 +56,7 @@ from apps.api.app.schemas.risk import RiskPrediction
 from apps.api.app.services.comparison import SpecificationComparisonService
 
 T = TypeVar("T")
-ANALYSIS_PIPELINE_VERSION = "4.0.0"
+ANALYSIS_PIPELINE_VERSION = "5.0.0"
 
 
 class AnalysisPipelineService:
@@ -195,12 +195,13 @@ class AnalysisPipelineService:
                 repository_filename, repository_content
             ),
         )
-        impacts = pipeline.run(
+        impact_result = pipeline.run(
             "match_api_usage",
-            lambda: ApiImpactMatcher().match(
+            lambda: ApiImpactMatcher().analyze(
                 comparison.changes, scan, old_contract, new_contract
             ),
         )
+        impacts = impact_result.impacts
         repository_summary = RepositoryScanSummary(
             archive_sha256=scan.archive_sha256,
             archive_entries=scan.archive_entries,
@@ -208,6 +209,7 @@ class AnalysisPipelineService:
             scanned_bytes=scan.scanned_bytes,
             skipped_files=scan.skipped_files,
             skipped_reasons=scan.skipped_reasons,
+            code_analysis=impact_result.code_analysis,
         )
         impacted_paths = {
             match.file_path for impact in impacts for match in impact.matches

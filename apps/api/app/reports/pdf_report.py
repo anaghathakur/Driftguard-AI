@@ -507,6 +507,20 @@ def _source_impact(
         )
         return story
 
+    direct_count = sum(getattr(match, "impact_depth", 0) == 0 for match in matches)
+    transitive_count = len(matches) - direct_count
+    maximum_depth = max(
+        (getattr(match, "impact_depth", 0) for match in matches),
+        default=0,
+    )
+    story.append(
+        Paragraph(
+            f"Direct usages: {direct_count} | Transitive callers: "
+            f"{transitive_count} | Maximum depth: {maximum_depth}",
+            styles["body"],
+        )
+    )
+
     for match in matches:
         location = (
             f"{_display(match.file_path)} - line {match.line}, "
@@ -515,8 +529,12 @@ def _source_impact(
         details = (
             f"<b>{escape(location)}</b><br/>"
             f"Match: {escape(_display(match.match_kind))} | "
-            f"Confidence: {escape(_display(match.confidence))}"
+            f"Confidence: {escape(_display(match.confidence))} | "
+            f"Depth: {getattr(match, 'impact_depth', 0)}"
         )
+        symbol = _display(getattr(match, "symbol", ""))
+        if symbol:
+            details += f"<br/>Symbol: {escape(symbol)}"
         story.append(Paragraph(details, styles["body"]))
 
         evidence = _display(match.evidence)
@@ -528,6 +546,18 @@ def _source_impact(
                     maxLineLength=95,
                 )
             )
+
+        trace = list(getattr(match, "trace", []) or [])[:6]
+        if trace:
+            story.append(Paragraph("Dependency chain", styles["small"]))
+            for step in trace:
+                step_symbol = _display(getattr(step, "symbol", "")) or "module scope"
+                step_text = (
+                    f"&#8594; {escape(step_symbol)} "
+                    f"({escape(_display(step.relation))}) - "
+                    f"{escape(_display(step.file_path))}:{step.line}"
+                )
+                story.append(Paragraph(step_text, styles["small"]))
 
     return story
 

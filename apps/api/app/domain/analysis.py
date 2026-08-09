@@ -74,6 +74,11 @@ class StoredMatch:
     match_kind: str
     confidence: str
     evidence: str
+    symbol: str | None = None
+    language: str | None = None
+    impact_depth: int = 0
+    analysis_kind: str = "lexical"
+    trace: tuple[dict[str, object], ...] = ()
 
 
 @dataclass(frozen=True, slots=True)

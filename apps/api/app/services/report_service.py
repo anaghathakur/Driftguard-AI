@@ -30,7 +30,7 @@ def build_analysis_report(
     )
 
     return AnalysisReport(
-        report_version="1.0",
+        report_version="1.1",
         generated_at=datetime.now(UTC),
         analysis=analysis,
         summary=AnalysisReportSummary(
@@ -46,6 +46,12 @@ def build_analysis_report(
             ),
             repository_matches=len(matches),
             impacted_files=impacted_files,
+            direct_matches=sum(match.impact_depth == 0 for match in matches),
+            transitive_matches=sum(match.impact_depth > 0 for match in matches),
+            max_impact_depth=max(
+                (match.impact_depth for match in matches),
+                default=0,
+            ),
             risk_predictions=len(risks),
             migration_recommendations=len(migrations),
         ),

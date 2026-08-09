@@ -4,13 +4,26 @@ from __future__ import annotations
 
 import re
 from collections.abc import Iterable
+from dataclasses import dataclass
 
+from apps.api.app.core.config import settings
 from apps.api.app.domain.openapi import NormalizedContract
 from apps.api.app.domain.repository import RepositoryScan, ScannedSourceFile
+from apps.api.app.repository.code_analyzer import (
+    ApiUsageAnchor,
+    CodeCallEdge,
+    RepositoryCodeAnalyzer,
+    RepositoryCodeGraph,
+    propagation_paths,
+)
 from apps.api.app.schemas.comparison import ApiChange
 from apps.api.app.schemas.impact import (
     ChangeImpact,
+    CodeAnalysisSummary,
+    ImpactAnalysisKind,
     ImpactMatch,
+    ImpactTraceRelation,
+    ImpactTraceStep,
     MatchConfidence,
     MatchKind,
 )
@@ -19,7 +32,27 @@ MAX_MATCHES_PER_CHANGE = 100
 METHOD_CONTEXT_LINES = 2
 
 
+@dataclass(frozen=True, slots=True)
+class ImpactMatchResult:
+    impacts: list[ChangeImpact]
+    code_analysis: CodeAnalysisSummary
+
+
 class ApiImpactMatcher:
+    def __init__(
+        self,
+        *,
+        max_symbols: int = settings.max_code_symbols,
+        max_edges: int = settings.max_code_graph_edges,
+        max_impact_depth: int = settings.max_impact_depth,
+    ) -> None:
+        self.max_impact_depth = max_impact_depth
+        self.code_analyzer = RepositoryCodeAnalyzer(
+            max_symbols=max_symbols,
+            max_edges=max_edges,
+            max_impact_depth=max_impact_depth,
+        )
+
     def match(
         self,
         changes: Iterable[ApiChange],
@@ -27,14 +60,36 @@ class ApiImpactMatcher:
         old_contract: NormalizedContract,
         new_contract: NormalizedContract,
     ) -> list[ChangeImpact]:
+        return self.analyze(
+            changes,
+            repository,
+            old_contract,
+            new_contract,
+        ).impacts
+
+    def analyze(
+        self,
+        changes: Iterable[ApiChange],
+        repository: RepositoryScan,
+        old_contract: NormalizedContract,
+        new_contract: NormalizedContract,
+    ) -> ImpactMatchResult:
+        change_list = list(changes)
+        graph = self.code_analyzer.analyze(repository)
         impacts: list[ChangeImpact] = []
-        for change in changes:
+        transitive_matches = 0
+        for change in change_list:
             operation_ids = _operation_ids(change, old_contract, new_contract)
-            matches: list[ImpactMatch] = []
+            lexical_matches: list[ImpactMatch] = []
             for source_file in repository.files:
-                matches.extend(self._match_file(change, operation_ids, source_file))
-                if len(matches) >= MAX_MATCHES_PER_CHANGE:
+                lexical_matches.extend(
+                    self._match_file(change, operation_ids, source_file)
+                )
+                if len(lexical_matches) >= MAX_MATCHES_PER_CHANGE:
                     break
+            semantic_matches = self._semantic_matches(change, graph)
+            matches = _merge_matches(lexical_matches, semantic_matches)
+            transitive_matches += sum(match.impact_depth > 0 for match in matches)
             impacts.append(
                 ChangeImpact(
                     change_id=change.change_id,
@@ -43,7 +98,72 @@ class ApiImpactMatcher:
                     matches=matches[:MAX_MATCHES_PER_CHANGE],
                 )
             )
-        return impacts
+        return ImpactMatchResult(
+            impacts=impacts,
+            code_analysis=graph.summary.model_copy(
+                update={"transitive_matches": transitive_matches}
+            ),
+        )
+
+    def _semantic_matches(
+        self,
+        change: ApiChange,
+        graph: RepositoryCodeGraph,
+    ) -> list[ImpactMatch]:
+        symbols = graph.symbol_map()
+        matches: list[ImpactMatch] = []
+        path_pattern = _path_pattern(change.path)
+        for anchor in graph.anchors:
+            if anchor.method.casefold() != change.method.casefold():
+                continue
+            if path_pattern.search(anchor.path) is None:
+                continue
+            symbol = symbols.get(anchor.symbol_id) if anchor.symbol_id else None
+            direct_trace = [_direct_trace(anchor, symbol.qualified_name if symbol else None)]
+            matches.append(
+                ImpactMatch(
+                    file_path=anchor.file_path,
+                    line=anchor.line,
+                    column=anchor.column,
+                    match_kind=MatchKind.DIRECT_SEMANTIC,
+                    confidence=MatchConfidence.HIGH,
+                    evidence=anchor.evidence,
+                    symbol=symbol.qualified_name if symbol else None,
+                    language=anchor.language,
+                    impact_depth=0,
+                    analysis_kind=ImpactAnalysisKind.DIRECT,
+                    trace=direct_trace,
+                )
+            )
+            for depth, caller, edge, chain in propagation_paths(
+                graph,
+                anchor,
+                max_depth=self.max_impact_depth,
+            ):
+                matches.append(
+                    ImpactMatch(
+                        file_path=caller.file_path,
+                        line=edge.line,
+                        column=edge.column,
+                        match_kind=(
+                            MatchKind.WRAPPER
+                            if depth == 1
+                            else MatchKind.TRANSITIVE_CALL
+                        ),
+                        confidence=MatchConfidence.MEDIUM,
+                        evidence=edge.evidence,
+                        symbol=caller.qualified_name,
+                        language=caller.language,
+                        impact_depth=depth,
+                        analysis_kind=(
+                            ImpactAnalysisKind.WRAPPER
+                            if depth == 1
+                            else ImpactAnalysisKind.TRANSITIVE
+                        ),
+                        trace=_trace_chain(anchor, symbol, chain, symbols),
+                    )
+                )
+        return matches
 
     def _match_file(
         self,
@@ -158,3 +278,127 @@ def _impact_match(
         confidence=confidence,
         evidence=evidence,
     )
+
+
+def _direct_trace(anchor: ApiUsageAnchor, symbol: str | None) -> ImpactTraceStep:
+    return ImpactTraceStep(
+        file_path=anchor.file_path,
+        symbol=symbol,
+        relation=ImpactTraceRelation.DIRECT_API_USAGE,
+        line=anchor.line,
+        column=anchor.column,
+        evidence=anchor.evidence,
+    )
+
+
+def _trace_chain(
+    anchor: ApiUsageAnchor,
+    anchor_symbol: object | None,
+    chain: tuple[CodeCallEdge, ...],
+    symbols: dict[str, object],
+) -> list[ImpactTraceStep]:
+    qualified_name = getattr(anchor_symbol, "qualified_name", None)
+    trace = [_direct_trace(anchor, qualified_name)]
+    for edge in chain:
+        caller = symbols.get(edge.caller_symbol_id)
+        trace.append(
+            ImpactTraceStep(
+                file_path=edge.file_path,
+                symbol=getattr(caller, "qualified_name", None),
+                relation=ImpactTraceRelation.CALLS,
+                line=edge.line,
+                column=edge.column,
+                evidence=edge.evidence,
+            )
+        )
+    return trace
+
+
+def _merge_matches(
+    lexical: list[ImpactMatch],
+    semantic: list[ImpactMatch],
+) -> list[ImpactMatch]:
+    precedence = {
+        MatchKind.DIRECT_SEMANTIC: 5,
+        MatchKind.WRAPPER: 4,
+        MatchKind.TRANSITIVE_CALL: 3,
+        MatchKind.PATH_AND_METHOD: 2,
+        MatchKind.OPERATION_ID: 2,
+        MatchKind.PATH: 1,
+    }
+    direct_by_line = {
+        (match.file_path, match.line): match
+        for match in semantic
+        if match.analysis_kind == ImpactAnalysisKind.DIRECT
+    }
+    semantic_by_line: dict[tuple[str, int], ImpactMatch] = {}
+    for match in semantic:
+        key = (match.file_path, match.line)
+        existing = semantic_by_line.get(key)
+        if existing is None or match.impact_depth < existing.impact_depth:
+            semantic_by_line[key] = match
+    direct_by_file: dict[str, list[ImpactMatch]] = {}
+    for match in direct_by_line.values():
+        direct_by_file.setdefault(match.file_path, []).append(match)
+    used_direct: set[tuple[str, int]] = set()
+    candidates: list[ImpactMatch] = []
+    for match in lexical:
+        if _looks_like_import_evidence(match.evidence):
+            continue
+        direct_key = (match.file_path, match.line)
+        semantic_same_line = semantic_by_line.get(direct_key)
+        if (
+            semantic_same_line is not None
+            and semantic_same_line.analysis_kind != ImpactAnalysisKind.DIRECT
+        ):
+            continue
+        direct = direct_by_line.get(direct_key)
+        if direct is None:
+            if any(
+                abs(candidate.line - match.line) <= METHOD_CONTEXT_LINES + 1
+                for candidate in direct_by_file.get(match.file_path, [])
+            ):
+                continue
+            candidates.append(match)
+            continue
+        used_direct.add(direct_key)
+        candidates.append(
+            direct.model_copy(
+                update={
+                    "line": match.line,
+                    "column": match.column,
+                    "match_kind": match.match_kind,
+                    "evidence": match.evidence,
+                }
+            )
+        )
+    candidates.extend(
+        match
+        for match in semantic
+        if match.analysis_kind != ImpactAnalysisKind.DIRECT
+        or (match.file_path, match.line) not in used_direct
+    )
+
+    strongest: dict[tuple[str, int, int, str | None], ImpactMatch] = {}
+    for match in candidates:
+        key = (match.file_path, match.line, match.column)
+        full_key = (*key, match.symbol if match.impact_depth > 0 else None)
+        existing = strongest.get(full_key)
+        if existing is None or precedence[match.match_kind] > precedence[existing.match_kind]:
+            strongest[full_key] = match
+    return sorted(
+        strongest.values(),
+        key=lambda match: (
+            match.impact_depth,
+            match.file_path,
+            match.line,
+            match.column,
+            -precedence[match.match_kind],
+            match.symbol or "",
+        ),
+    )
+
+
+def _looks_like_import_evidence(evidence: str) -> bool:
+    normalized = evidence.strip().casefold()
+    return normalized.startswith(("import ", "export ")) and " from " in normalized

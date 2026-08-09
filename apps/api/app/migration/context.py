@@ -83,6 +83,19 @@ def build_prompt(context: MigrationContext) -> PromptBuildResult:
                 "column": match.column,
                 "match_kind": match.match_kind.value,
                 "confidence": match.confidence.value,
+                "symbol": _bounded_text(match.symbol, 500),
+                "language": _bounded_text(match.language, 30),
+                "impact_depth": match.impact_depth,
+                "analysis_kind": match.analysis_kind.value,
+                "impact_trace": [
+                    {
+                        "file_path": _safe_relative_path(step.file_path),
+                        "symbol": _bounded_text(step.symbol, 500),
+                        "relation": step.relation.value,
+                        "line": step.line,
+                    }
+                    for step in match.trace[:6]
+                ],
                 "untrusted_source_snippet": safe_evidence,
             }
         )

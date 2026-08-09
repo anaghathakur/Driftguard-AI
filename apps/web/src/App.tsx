@@ -1368,6 +1368,15 @@ function SourceMatchesPanel({
 }: {
   matches: RepositoryMatch[];
 }) {
+  const directMatches = matches.filter(
+    (match) => (match.impact_depth ?? 0) === 0,
+  ).length;
+  const transitiveMatches = matches.length - directMatches;
+  const maximumDepth = Math.max(
+    0,
+    ...matches.map((match) => match.impact_depth ?? 0),
+  );
+
   return (
     <section className="border-t border-white/10 bg-slate-950/70 p-5">
       <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
@@ -1393,6 +1402,17 @@ function SourceMatchesPanel({
       </div>
 
       {matches.length > 0 && (
+        <div className="mt-4 grid gap-3 sm:grid-cols-3">
+          <ImpactMetric label="Direct usages" value={directMatches} />
+          <ImpactMetric
+            label="Transitive callers"
+            value={transitiveMatches}
+          />
+          <ImpactMetric label="Maximum depth" value={maximumDepth} />
+        </div>
+      )}
+
+      {matches.length > 0 && (
         <div className="mt-4 space-y-3">
           {matches.map((match, index) => (
             <article
@@ -1409,10 +1429,18 @@ function SourceMatchesPanel({
                       Line {match.line}, column{" "}
                       {match.column}
                     </span>
+                    {match.symbol && (
+                      <code className="rounded-md bg-violet-400/10 px-2 py-1 text-xs text-violet-200">
+                        {match.symbol}
+                      </code>
+                    )}
                   </div>
                 </div>
 
                 <div className="flex flex-wrap gap-2">
+                  <span className="rounded-full bg-violet-400/10 px-3 py-1 text-xs font-semibold uppercase text-violet-200">
+                    {impactLabel(match)}
+                  </span>
                   <span className="rounded-full bg-cyan-400/10 px-3 py-1 text-xs font-semibold text-cyan-200">
                     {formatMatchKind(match.match_kind)}
                   </span>
@@ -1425,6 +1453,38 @@ function SourceMatchesPanel({
                   </span>
                 </div>
               </div>
+
+              {(match.trace?.length ?? 0) > 0 && (
+                <div className="mt-4 rounded-lg border border-violet-400/15 bg-violet-400/5 p-3">
+                  <p className="text-xs font-semibold uppercase tracking-wider text-violet-300">
+                    Dependency chain
+                  </p>
+                  <div className="mt-3 space-y-2">
+                    {match.trace?.map((step, stepIndex) => (
+                      <div
+                        key={`${step.file_path}-${step.line}-${stepIndex}`}
+                        className="flex gap-3 text-xs text-slate-300"
+                        style={{ paddingLeft: `${stepIndex * 14}px` }}
+                      >
+                        <span className="text-violet-300">
+                          {stepIndex === 0 ? "●" : "↳"}
+                        </span>
+                        <div className="min-w-0">
+                          <code className="break-all text-cyan-100">
+                            {step.symbol ?? step.file_path}
+                          </code>
+                          <span className="ml-2 text-slate-500">
+                            {step.relation === "direct_api_usage"
+                              ? "direct API usage"
+                              : "calls dependency"}{" "}
+                            · line {step.line}
+                          </span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
 
               <div className="mt-4">
                 <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">
@@ -1440,6 +1500,30 @@ function SourceMatchesPanel({
       )}
     </section>
   );
+}
+
+function ImpactMetric({
+  label,
+  value,
+}: {
+  label: string;
+  value: number;
+}) {
+  return (
+    <div className="rounded-lg border border-white/10 bg-black/20 px-3 py-2">
+      <p className="text-[10px] uppercase tracking-wider text-slate-500">
+        {label}
+      </p>
+      <p className="mt-1 text-lg font-semibold text-white">{value}</p>
+    </div>
+  );
+}
+
+function impactLabel(match: RepositoryMatch) {
+  const depth = match.impact_depth ?? 0;
+  if (depth === 0) return "Direct";
+  if (depth === 1) return "Called by · depth 1";
+  return `Transitive · depth ${depth}`;
 }
 
 function formatMatchKind(value: string) {

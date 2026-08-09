@@ -281,6 +281,11 @@ class FirestoreAnalysisRepository(AnalysisRepository):
                             "match_kind": match.match_kind.value,
                             "confidence": match.confidence.value,
                             "evidence": safe_evidence,
+                            "symbol": match.symbol,
+                            "language": match.language,
+                            "impact_depth": match.impact_depth,
+                            "analysis_kind": match.analysis_kind.value,
+                            "trace": _safe_match_trace(match.trace),
                         },
                     )
                 )
@@ -375,6 +380,11 @@ class FirestoreAnalysisRepository(AnalysisRepository):
                     match_kind=data["match_kind"],
                     confidence=data["confidence"],
                     evidence=data["evidence"],
+                    symbol=data.get("symbol"),
+                    language=data.get("language"),
+                    impact_depth=int(data.get("impact_depth", 0)),
+                    analysis_kind=data.get("analysis_kind", "lexical"),
+                    trace=tuple(data.get("trace") or []),
                 )
             )
         return matches
@@ -656,3 +666,14 @@ def _without(
         for key, value in data.items()
         if key not in keys
     }
+
+
+def _safe_match_trace(trace: list[Any]) -> list[dict[str, Any]]:
+    safe: list[dict[str, Any]] = []
+    for step in trace[:10]:
+        data = step.model_dump(mode="json")
+        data["evidence"] = redact_secrets(str(data.get("evidence", ""))[:240])[0][
+            :240
+        ]
+        safe.append(data)
+    return safe

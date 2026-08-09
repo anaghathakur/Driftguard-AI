@@ -215,5 +215,20 @@ class Settings:
         100,
     )
 
+    max_code_symbols: int = _positive_int(
+        "DRIFTGUARD_MAX_CODE_SYMBOLS",
+        10_000,
+    )
+
+    max_code_graph_edges: int = _positive_int(
+        "DRIFTGUARD_MAX_CODE_GRAPH_EDGES",
+        25_000,
+    )
+
+    max_impact_depth: int = _positive_int(
+        "DRIFTGUARD_MAX_IMPACT_DEPTH",
+        3,
+    )
+
 
 settings = Settings()
