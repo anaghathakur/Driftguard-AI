@@ -222,6 +222,89 @@ export type PatchProposalListItem = Pick<
   | "edit_count"
 >;
 
+export type ValidationFinding = {
+  check_id: string;
+  category: string;
+  status: "pass" | "warning" | "fail" | "unknown";
+  severity: string;
+  message: string;
+  change_id: string | null;
+  file_path: string | null;
+  symbol: string | null;
+  line: number | null;
+  column: number | null;
+  evidence: string | null;
+};
+
+export type PatchValidationRun = {
+  validation_id: string;
+  patch_id: string;
+  analysis_id: string;
+  created_at: string;
+  validation_profile_version: string;
+  readiness: "ready_for_review" | "needs_review" | "blocked";
+  source_repository_hash: string;
+  request_fingerprint: string;
+  passed_count: number;
+  warning_count: number;
+  failed_count: number;
+  unknown_count: number;
+  contract_findings: ValidationFinding[];
+  dependency_findings: ValidationFinding[];
+  related_tests: Array<{
+    file_path: string;
+    language: string;
+    relevance: "high" | "medium" | "low";
+    reasons: string[];
+    related_symbols: string[];
+    related_changes: string[];
+    lines: number[];
+  }>;
+  test_gaps: Array<{
+    gap_id: string;
+    message: string;
+    symbol: string | null;
+    file_path: string | null;
+    impact_depth: number;
+  }>;
+  test_plan: {
+    summary: string;
+    cases: Array<{
+      title: string;
+      test_type: "unit" | "integration" | "regression" | "negative" | "contract";
+      target: string;
+      rationale: string;
+      steps: string[];
+      expected_result: string;
+      priority: "high" | "medium" | "low";
+    }>;
+  };
+  provider: "mock" | "gemini";
+  provider_model: string;
+  provider_mode: "deterministic_mock" | "external";
+  warnings: string[];
+  modified_files: string[];
+  direct_impacted_files: string[];
+  transitive_impacted_files: string[];
+  unrelated_modified_files: string[];
+  static_only: true;
+};
+
+export type PatchValidationListItem = Pick<
+  PatchValidationRun,
+  | "validation_id"
+  | "patch_id"
+  | "analysis_id"
+  | "created_at"
+  | "readiness"
+  | "passed_count"
+  | "warning_count"
+  | "failed_count"
+  | "unknown_count"
+  | "provider"
+  | "provider_model"
+>;
+
 export type AnalysisReportSummary = {
   total_changes: number;
   breaking_changes: number;
@@ -235,6 +318,7 @@ export type AnalysisReportSummary = {
   risk_predictions: number;
   migration_recommendations: number;
   patch_proposals: number;
+  patch_validations: number;
 };
 
 export type AnalysisReport = {
@@ -247,6 +331,7 @@ export type AnalysisReport = {
   risks: RiskPrediction[];
   migrations: MigrationRecommendation[];
   patches: PatchProposal[];
+  patch_validations: PatchValidationRun[];
   pipeline: Array<Record<string, unknown>>;
 };
 
@@ -459,6 +544,38 @@ export async function getPatchProposal(
 ): Promise<PatchProposal> {
   return requestJson<PatchProposal>(
     `/api/v1/analyses/${analysisId}/patches/${patchId}`,
+  );
+}
+
+export async function validatePatchProposal(
+  analysisId: string,
+  patchId: string,
+  repository?: File | null,
+): Promise<PatchValidationRun> {
+  const formData = new FormData();
+  if (repository) formData.append("repository", repository);
+  return requestJson<PatchValidationRun>(
+    `/api/v1/analyses/${analysisId}/patches/${patchId}/validations`,
+    { method: "POST", body: formData },
+  );
+}
+
+export async function getPatchValidations(
+  analysisId: string,
+  patchId: string,
+): Promise<PatchValidationListItem[]> {
+  return requestJson<PatchValidationListItem[]>(
+    `/api/v1/analyses/${analysisId}/patches/${patchId}/validations`,
+  );
+}
+
+export async function getPatchValidation(
+  analysisId: string,
+  patchId: string,
+  validationId: string,
+): Promise<PatchValidationRun> {
+  return requestJson<PatchValidationRun>(
+    `/api/v1/analyses/${analysisId}/patches/${patchId}/validations/${validationId}`,
   );
 }
 

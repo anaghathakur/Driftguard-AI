@@ -56,6 +56,7 @@ from apps.api.app.schemas.impact import (
 from apps.api.app.schemas.migration import MigrationRecommendation
 from apps.api.app.schemas.patch import PatchProposal
 from apps.api.app.schemas.risk import RiskPrediction
+from apps.api.app.schemas.validation import PatchValidationRun
 from apps.api.app.services.comparison import SpecificationComparisonService
 
 T = TypeVar("T")
@@ -352,6 +353,14 @@ class AnalysisPipelineService:
     def get_patch_proposals(self, analysis_id: str) -> list[PatchProposal]:
         self._require_analysis(analysis_id)
         return self.repository.list_patch_proposals(analysis_id)
+
+    def get_patch_validations(self, analysis_id: str) -> list[PatchValidationRun]:
+        validations: list[PatchValidationRun] = []
+        for patch in self.get_patch_proposals(analysis_id):
+            validations.extend(
+                self.repository.list_patch_validations(analysis_id, patch.patch_id)
+            )
+        return sorted(validations, key=lambda item: item.created_at, reverse=True)
 
     def _duplicate_comparison(self, record: AnalysisRecord) -> ComparisonResponse:
         self._raise_unless_succeeded(record)

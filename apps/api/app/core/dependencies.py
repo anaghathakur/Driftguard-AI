@@ -49,6 +49,12 @@ from apps.api.app.risk.classifier import RiskClassifier
 from apps.api.app.services.analysis_pipeline import (
     AnalysisPipelineService,
 )
+from apps.api.app.validation.provider import (
+    GeminiTestPlanProvider,
+    MockTestPlanProvider,
+    TestPlanProvider,
+)
+from apps.api.app.validation.service import PatchValidationService
 
 
 @lru_cache
@@ -190,6 +196,31 @@ def get_patch_proposal_service(
     ],
 ) -> PatchProposalService:
     return PatchProposalService(repository, provider, github_source)
+
+
+@lru_cache
+def get_test_plan_provider() -> TestPlanProvider:
+    if settings.test_plan_provider == "gemini":
+        return GeminiTestPlanProvider(
+            api_key=settings.gemini_api_key,
+            model_name=settings.gemini_model,
+            timeout_seconds=settings.ai_timeout_seconds,
+            max_retries=settings.ai_max_retries,
+            sender=_send_json,
+        )
+    if settings.test_plan_provider == "mock":
+        return MockTestPlanProvider()
+    raise RuntimeError("DRIFTGUARD_TEST_PLAN_PROVIDER must be either 'mock' or 'gemini'")
+
+
+def get_patch_validation_service(
+    repository: Annotated[AnalysisRepository, Depends(get_analysis_repository)],
+    provider: Annotated[TestPlanProvider, Depends(get_test_plan_provider)],
+    github_source: Annotated[
+        GitHubRepositorySource, Depends(get_github_repository_source)
+    ],
+) -> PatchValidationService:
+    return PatchValidationService(repository, provider, github_source)
 
 
 def get_openapi_specification_source() -> OpenApiSpecificationSource:

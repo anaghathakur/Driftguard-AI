@@ -57,6 +57,7 @@ def build_analysis_pdf(report: AnalysisReport) -> bytes:
     story.append(PageBreak())
     story.extend(_changes_block(report, styles))
     story.extend(_patches_block(report, styles))
+    story.extend(_patch_validations_block(report, styles))
     story.extend(_pipeline_block(report, styles))
     story.extend(_disclaimer_block(styles))
 
@@ -820,6 +821,60 @@ def _patches_block(
     story.append(
         Paragraph(
             "No repository files were modified. Every patch is a review-only proposal.",
+            styles["body"],
+        )
+    )
+    return story
+
+
+def _patch_validations_block(
+    report: AnalysisReport,
+    styles: dict[str, ParagraphStyle],
+) -> list[Any]:
+    if not report.patch_validations:
+        return []
+    story: list[Any] = [Paragraph("Patch validation", styles["section"])]
+    for validation in report.patch_validations[:3]:
+        story.append(
+            Paragraph(
+                f"<b>{escape(_display(validation.readiness)).upper()}</b><br/>"
+                f"Checks: {validation.passed_count} passed | "
+                f"{validation.warning_count} warnings | {validation.failed_count} failed | "
+                f"{validation.unknown_count} unknown",
+                styles["body"],
+            )
+        )
+        for finding in [
+            *validation.contract_findings[:5],
+            *validation.dependency_findings[:5],
+        ]:
+            story.append(
+                Paragraph(
+                    f"- {escape(_display(finding.status)).upper()}: "
+                    f"{escape(finding.message)}",
+                    styles["bullet"],
+                )
+            )
+        if validation.related_tests:
+            story.append(
+                Paragraph(
+                    f"Related tests discovered: {len(validation.related_tests)}",
+                    styles["small"],
+                )
+            )
+        for gap in validation.test_gaps[:4]:
+            story.append(Paragraph(f"Test gap: {escape(gap.message)}", styles["small"]))
+        for case in validation.test_plan.cases[:6]:
+            story.append(
+                Paragraph(
+                    f"{escape(_display(case.test_type)).upper()} - "
+                    f"{escape(case.title)} ({escape(case.target)})",
+                    styles["small"],
+                )
+            )
+    story.append(
+        Paragraph(
+            "Static validation only. Repository code and tests were not executed.",
             styles["body"],
         )
     )

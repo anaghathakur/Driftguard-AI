@@ -28,6 +28,7 @@ from apps.api.app.schemas.impact import ChangeImpact, ImpactSummary, RepositoryS
 from apps.api.app.schemas.migration import MigrationRecommendation
 from apps.api.app.schemas.patch import PatchProposal
 from apps.api.app.schemas.risk import RiskPrediction
+from apps.api.app.schemas.validation import PatchValidationRun
 
 _ANALYSES = "analyses"
 _FINGERPRINTS = "analysis_fingerprints"
@@ -40,6 +41,7 @@ _MIGRATIONS = "migrations"
 _PIPELINE = "pipeline"
 _FAILURES = "failures"
 _PATCHES = "patches"
+_VALIDATIONS = "validations"
 
 _MAX_BATCH_WRITES = 400
 _STAGE_ID_ATTEMPTS = 5
@@ -512,6 +514,57 @@ class FirestoreAnalysisRepository(AnalysisRepository):
         )
         return [
             PatchProposal.model_validate(snapshot.to_dict() or {})
+            for snapshot in query.stream()
+        ]
+
+    def _validation_collection(self, analysis_id: str, patch_id: str):
+        return (
+            self._analyses.document(analysis_id)
+            .collection(_PATCHES)
+            .document(patch_id)
+            .collection(_VALIDATIONS)
+        )
+
+    def save_patch_validation(self, validation: PatchValidationRun) -> PatchValidationRun:
+        existing = self.get_patch_validation_by_fingerprint(
+            validation.analysis_id,
+            validation.patch_id,
+            validation.request_fingerprint,
+        )
+        if existing is not None:
+            return existing
+        self._validation_collection(validation.analysis_id, validation.patch_id).document(
+            validation.validation_id
+        ).set(validation.model_dump(mode="python"))
+        return validation
+
+    def get_patch_validation(
+        self, analysis_id: str, patch_id: str, validation_id: str
+    ) -> PatchValidationRun | None:
+        snapshot = self._validation_collection(analysis_id, patch_id).document(
+            validation_id
+        ).get()
+        if not snapshot.exists:
+            return None
+        return PatchValidationRun.model_validate(snapshot.to_dict() or {})
+
+    def get_patch_validation_by_fingerprint(
+        self, analysis_id: str, patch_id: str, fingerprint: str
+    ) -> PatchValidationRun | None:
+        for snapshot in self._validation_collection(analysis_id, patch_id).stream():
+            data = snapshot.to_dict() or {}
+            if data.get("request_fingerprint") == fingerprint:
+                return PatchValidationRun.model_validate(data)
+        return None
+
+    def list_patch_validations(
+        self, analysis_id: str, patch_id: str
+    ) -> list[PatchValidationRun]:
+        query = self._validation_collection(analysis_id, patch_id).order_by(
+            "created_at", direction=firestore.Query.DESCENDING
+        )
+        return [
+            PatchValidationRun.model_validate(snapshot.to_dict() or {})
             for snapshot in query.stream()
         ]
 

@@ -27,6 +27,7 @@ from apps.api.app.schemas.migration import (
 )
 from apps.api.app.schemas.patch import PatchProposal
 from apps.api.app.schemas.risk import RiskPrediction
+from apps.api.app.schemas.validation import PatchValidationRun
 
 
 class AnalysisRepository(ABC):
@@ -175,6 +176,28 @@ class AnalysisRepository(ABC):
     @abstractmethod
     def list_patch_proposals(self, analysis_id: str) -> list[PatchProposal]:
         """Retrieve patch proposals for one analysis."""
+
+    @abstractmethod
+    def save_patch_validation(self, validation: PatchValidationRun) -> PatchValidationRun:
+        """Persist or reuse one idempotent Phase 13 validation."""
+
+    @abstractmethod
+    def get_patch_validation(
+        self, analysis_id: str, patch_id: str, validation_id: str
+    ) -> PatchValidationRun | None:
+        """Retrieve one validation belonging to an analysis patch."""
+
+    @abstractmethod
+    def get_patch_validation_by_fingerprint(
+        self, analysis_id: str, patch_id: str, fingerprint: str
+    ) -> PatchValidationRun | None:
+        """Retrieve an idempotent validation by request fingerprint."""
+
+    @abstractmethod
+    def list_patch_validations(
+        self, analysis_id: str, patch_id: str
+    ) -> list[PatchValidationRun]:
+        """Retrieve validation history for one patch."""
 
     @abstractmethod
     def delete(

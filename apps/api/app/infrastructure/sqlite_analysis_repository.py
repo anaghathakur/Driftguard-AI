@@ -30,6 +30,7 @@ from apps.api.app.schemas.impact import ChangeImpact, ImpactSummary, RepositoryS
 from apps.api.app.schemas.migration import MigrationRecommendation
 from apps.api.app.schemas.patch import PatchProposal
 from apps.api.app.schemas.risk import RiskPrediction
+from apps.api.app.schemas.validation import PatchValidationRun
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS analyses (
@@ -227,6 +228,22 @@ CREATE TABLE IF NOT EXISTS patch_proposals (
     FOREIGN KEY (analysis_id) REFERENCES analyses(analysis_id) ON DELETE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS patch_validation_runs (
+    validation_id TEXT PRIMARY KEY,
+    patch_id TEXT NOT NULL,
+    analysis_id TEXT NOT NULL,
+    request_fingerprint TEXT NOT NULL UNIQUE CHECK (length(request_fingerprint) = 64),
+    created_at TEXT NOT NULL,
+    validation_profile_version TEXT NOT NULL,
+    readiness TEXT NOT NULL CHECK (
+        readiness IN ('ready_for_review', 'needs_review', 'blocked')
+    ),
+    source_repository_hash TEXT NOT NULL CHECK (length(source_repository_hash) = 64),
+    validation_json TEXT NOT NULL,
+    FOREIGN KEY (patch_id) REFERENCES patch_proposals(patch_id) ON DELETE CASCADE,
+    FOREIGN KEY (analysis_id) REFERENCES analyses(analysis_id) ON DELETE CASCADE
+);
+
 CREATE INDEX IF NOT EXISTS idx_analyses_created_at ON analyses(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_changes_analysis ON analysis_changes(analysis_id, ordinal);
 CREATE INDEX IF NOT EXISTS idx_matches_analysis ON repository_matches(analysis_id, match_id);
@@ -237,6 +254,8 @@ CREATE INDEX IF NOT EXISTS idx_pipeline_analysis ON pipeline_stages(analysis_id,
 CREATE INDEX IF NOT EXISTS idx_failures_analysis ON analysis_failures(analysis_id, failure_id);
 CREATE INDEX IF NOT EXISTS idx_patches_analysis
     ON patch_proposals(analysis_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_patch_validations_patch
+    ON patch_validation_runs(analysis_id, patch_id, created_at DESC);
 """
 
 
@@ -834,6 +853,76 @@ class SQLiteAnalysisRepository(AnalysisRepository):
             ).fetchall()
         return [_patch_proposal(row) for row in rows]
 
+    def save_patch_validation(self, validation: PatchValidationRun) -> PatchValidationRun:
+        with self._transaction() as connection:
+            existing = connection.execute(
+                "SELECT * FROM patch_validation_runs WHERE request_fingerprint = ?",
+                (validation.request_fingerprint,),
+            ).fetchone()
+            if existing is not None:
+                return _patch_validation(existing)
+            connection.execute(
+                """
+                INSERT INTO patch_validation_runs (
+                    validation_id, patch_id, analysis_id, request_fingerprint,
+                    created_at, validation_profile_version, readiness,
+                    source_repository_hash, validation_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    validation.validation_id,
+                    validation.patch_id,
+                    validation.analysis_id,
+                    validation.request_fingerprint,
+                    _timestamp(validation.created_at),
+                    validation.validation_profile_version,
+                    validation.readiness.value,
+                    validation.source_repository_hash,
+                    _json(validation.model_dump(mode="json")),
+                ),
+            )
+        return validation
+
+    def get_patch_validation(
+        self, analysis_id: str, patch_id: str, validation_id: str
+    ) -> PatchValidationRun | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT * FROM patch_validation_runs
+                WHERE analysis_id = ? AND patch_id = ? AND validation_id = ?
+                """,
+                (analysis_id, patch_id, validation_id),
+            ).fetchone()
+        return _patch_validation(row) if row is not None else None
+
+    def get_patch_validation_by_fingerprint(
+        self, analysis_id: str, patch_id: str, fingerprint: str
+    ) -> PatchValidationRun | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT * FROM patch_validation_runs
+                WHERE analysis_id = ? AND patch_id = ? AND request_fingerprint = ?
+                """,
+                (analysis_id, patch_id, fingerprint),
+            ).fetchone()
+        return _patch_validation(row) if row is not None else None
+
+    def list_patch_validations(
+        self, analysis_id: str, patch_id: str
+    ) -> list[PatchValidationRun]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT * FROM patch_validation_runs
+                WHERE analysis_id = ? AND patch_id = ?
+                ORDER BY created_at DESC, validation_id
+                """,
+                (analysis_id, patch_id),
+            ).fetchall()
+        return [_patch_validation(row) for row in rows]
+
     def delete(self, analysis_id: str) -> bool:
         with self._transaction() as connection:
             cursor = connection.execute(
@@ -918,6 +1007,10 @@ def _patch_proposal(row: sqlite3.Row) -> PatchProposal:
             "redactions_applied": row["redactions_applied"],
         }
     )
+
+
+def _patch_validation(row: sqlite3.Row) -> PatchValidationRun:
+    return PatchValidationRun.model_validate(_load_json(row["validation_json"]))
 
 
 def _stage_record(row: sqlite3.Row) -> PipelineStageRecord:

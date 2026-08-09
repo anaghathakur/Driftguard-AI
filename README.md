@@ -5,11 +5,83 @@ classifies change risk with explainable local models, and keeps a local analysis
 
 ## Current milestone
 
-Phase 12 adds review-only proposed code patches to the existing OpenAPI comparison, deep impact
-analysis, monitoring, ML risk, migration guidance, persistence, reporting, and React dashboard.
-DriftGuard verifies the analyzed repository snapshot, accepts only structured bounded edits,
-applies them to in-memory source copies, validates them statically, and renders its own unified
-diff. It never modifies the repository.
+Phase 13 adds patch validation and test intelligence to the existing OpenAPI comparison, deep
+impact analysis, monitoring, ML risk, migration guidance, review-only patch proposals,
+persistence, reporting, and React dashboard. DriftGuard can now compare a proposed patch with the
+new contract, inspect deterministic caller problems, discover related tests, surface test gaps,
+and recommend a bounded test plan without executing repository code or tests.
+
+## Patch validation and test intelligence
+
+Validation is an explicit developer action on a Phase 12 patch. GitHub-backed analyses securely
+re-fetch through `GitHubRepositorySource`; ZIP-backed analyses require the original ZIP again.
+The archive SHA-256 must match both the analysis and patch fingerprints. DriftGuard then ignores
+the stored unified diff as an application mechanism and replays the persisted structured edits
+through the trusted Phase 12 applicator into an in-memory source snapshot. Repository files are
+never written.
+
+Under validation profile `1.0.0`, DriftGuard re-runs the Phase 11 analyzer against that patched
+snapshot and checks statically resolvable endpoint/method usage, required request fields, removed
+request fields, modified signatures, resolved callers, and patch blast radius. Python uses AST
+inspection; JavaScript and TypeScript use conservative static parsing. Dynamic payloads and
+unresolved calls produce `UNKNOWN` or warnings, not false failures. A supported stale-value case
+looks like this:
+
+```text
+POST /payments: email removed, customer_id required
+        -> proposed payment-client patch
+        -> contract checks pass
+        -> checkout still passes order["email"] into customer_id
+        -> NEEDS REVIEW
+        -> recommend unit, integration, negative, and regression tests
+```
+
+Test discovery recognizes Python `test_*.py`, `*_test.py`, and `tests/`, plus JavaScript/
+TypeScript `*.test.*`, `*.spec.*`, and `__tests__/`. Relevance is explainable and categorical:
+`HIGH` for direct symbols/endpoints/fields, `MEDIUM` for impacted callers, and `LOW` for a weak
+module or directory relationship. A discovered test is reported as related; DriftGuard never
+claims runtime coverage. Missing tests for impacted symbols are explicit test gaps.
+
+Readiness is deterministic and cannot be selected by an AI provider:
+
+- `BLOCKED` means a definite static failure such as a missing required field, a removed field
+  still sent, an incompatible caller, or an out-of-scope edit.
+- `NEEDS_REVIEW` means meaningful uncertainty, stale-value propagation, or missing direct tests.
+- `READY_FOR_REVIEW` means the bounded static checks found no blocking or meaningful unresolved
+  migration issue. It does not mean safe to deploy.
+
+The zero-cost mock test-plan provider derives contract, unit, integration, negative, and
+regression recommendations from persisted changes and impact paths. Optional Gemini uses the same
+configured key/model and receives only bounded secret-redacted structured context—not the whole
+repository. Repository content remains hostile untrusted data, provider output is schema checked,
+and the provider cannot execute tests, request secrets, modify readiness, or modify files.
+
+Validation results persist as bounded `PatchValidationRun` records with findings, related tests,
+gaps, test cases, snapshot/profile fingerprints, and provider provenance. SQLite uses a cascading
+`patch_validation_runs` table; Firestore stores validations below the patch document. Repeated
+identical validation requests reuse the same deterministic fingerprint, and deleting an analysis
+removes its patches and validations. JSON/PDF reports and the existing patch-review UI include
+the latest bounded validation intelligence.
+
+Endpoints:
+
+- `POST /api/v1/analyses/{analysis_id}/patches/{patch_id}/validations`
+- `GET /api/v1/analyses/{analysis_id}/patches/{patch_id}/validations`
+- `GET /api/v1/analyses/{analysis_id}/patches/{patch_id}/validations/{validation_id}`
+
+Phase 13 limits are configurable:
+
+```text
+DRIFTGUARD_TEST_PLAN_PROVIDER=mock
+DRIFTGUARD_MAX_VALIDATION_FINDINGS=100
+DRIFTGUARD_MAX_RELATED_TESTS=50
+DRIFTGUARD_MAX_TEST_PLAN_CASES=12
+DRIFTGUARD_MAX_TEST_CONTEXT_BYTES=40000
+```
+
+This phase performs static validation only. It never imports repository modules, runs Python or
+JavaScript, executes tests/builds/package managers/scripts, applies a patch to a repository,
+creates Git branches or commits, pushes code, creates pull requests, or deploys anything.
 
 ## AI-assisted proposed patch generation
 

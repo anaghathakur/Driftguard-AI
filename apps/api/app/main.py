@@ -29,6 +29,7 @@ from apps.api.app.api.routes.risk import (
 from apps.api.app.api.routes.specifications import (
     router as specifications_router,
 )
+from apps.api.app.api.routes.validations import router as validations_router
 from apps.api.app.core.config import settings
 from apps.api.app.core.dependencies import (
     get_default_analysis_repository,
@@ -103,6 +104,10 @@ def create_app() -> FastAPI:
     )
     app.include_router(
         patches_router,
+        prefix=settings.api_prefix,
+    )
+    app.include_router(
+        validations_router,
         prefix=settings.api_prefix,
     )
 

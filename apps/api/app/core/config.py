@@ -255,5 +255,30 @@ class Settings:
         100_000,
     )
 
+    test_plan_provider: str = os.getenv(
+        "DRIFTGUARD_TEST_PLAN_PROVIDER",
+        "mock",
+    ).strip().lower()
+
+    max_validation_findings: int = _positive_int(
+        "DRIFTGUARD_MAX_VALIDATION_FINDINGS",
+        100,
+    )
+
+    max_related_tests: int = _positive_int(
+        "DRIFTGUARD_MAX_RELATED_TESTS",
+        50,
+    )
+
+    max_test_plan_cases: int = _positive_int(
+        "DRIFTGUARD_MAX_TEST_PLAN_CASES",
+        12,
+    )
+
+    max_test_context_bytes: int = _positive_int(
+        "DRIFTGUARD_MAX_TEST_CONTEXT_BYTES",
+        40_000,
+    )
+
 
 settings = Settings()

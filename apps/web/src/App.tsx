@@ -18,7 +18,10 @@ import {
   getMigrationRecommendations,
   getPatchProposal,
   getPatchProposals,
+  getPatchValidation,
+  getPatchValidations,
   getRiskPredictions,
+  validatePatchProposal,
   type AnalysisHistoryItem,
   type ApiChange,
   type ComparisonResponse,
@@ -26,6 +29,7 @@ import {
   type MigrationProviderStatus,
   type MigrationRecommendation,
   type PatchProposal,
+  type PatchValidationRun,
   type PersistedMatch,
   type RepositoryMatch,
   type RiskPrediction,
@@ -1289,10 +1293,15 @@ function PatchProposalPanel({
     useState(false);
   const [patchError, setPatchError] =
     useState<string | null>(null);
+  const [validation, setValidation] =
+    useState<PatchValidationRun | null>(null);
+  const [isValidating, setIsValidating] = useState(false);
+  const [validationError, setValidationError] = useState<string | null>(null);
 
   useEffect(() => {
     let active = true;
     setProposal(null);
+    setValidation(null);
     setPatchError(null);
     void getPatchProposals(analysisId)
       .then(async (items) => {
@@ -1302,6 +1311,14 @@ function PatchProposalPanel({
           items[0].patch_id,
         );
         if (active) setProposal(existing);
+        const validations = await getPatchValidations(analysisId, existing.patch_id);
+        if (!active || validations.length === 0) return;
+        const detail = await getPatchValidation(
+          analysisId,
+          existing.patch_id,
+          validations[0].validation_id,
+        );
+        if (active) setValidation(detail);
       })
       .catch(() => {
         // An absent proposal should not obscure a completed analysis.
@@ -1330,6 +1347,29 @@ function PatchProposalPanel({
       );
     } finally {
       setIsGenerating(false);
+    }
+  }
+
+  async function handleValidatePatch() {
+    if (!proposal || isValidating) return;
+    setIsValidating(true);
+    setValidationError(null);
+    try {
+      setValidation(
+        await validatePatchProposal(
+          analysisId,
+          proposal.patch_id,
+          repositoryZip,
+        ),
+      );
+    } catch (error) {
+      setValidationError(
+        error instanceof Error
+          ? error.message
+          : "The proposed patch could not be statically validated.",
+      );
+    } finally {
+      setIsValidating(false);
     }
   }
 
@@ -1404,6 +1444,32 @@ function PatchProposalPanel({
           <div className="rounded-lg border border-amber-400/25 bg-amber-400/10 p-3 text-sm font-semibold text-amber-100">
             No repository files have been modified. This diff is for developer review only.
           </div>
+          <div className="rounded-lg border border-cyan-400/20 bg-cyan-400/5 p-4">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-cyan-300">
+                  Patch validation &amp; test intelligence
+                </p>
+                <p className="mt-1 text-xs text-slate-400">
+                  Static validation only. Repository code and tests were not executed.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => void handleValidatePatch()}
+                disabled={isValidating}
+                className="rounded-lg bg-cyan-300 px-4 py-2 text-sm font-semibold text-slate-950 transition hover:bg-cyan-200 disabled:opacity-60"
+              >
+                {isValidating ? "Validating statically..." : "Validate patch"}
+              </button>
+            </div>
+            {validationError && (
+              <p className="mt-3 rounded border border-rose-400/20 bg-rose-400/10 p-3 text-sm text-rose-100">
+                {validationError}
+              </p>
+            )}
+            {validation && <PatchValidationPanel validation={validation} />}
+          </div>
           <div className="overflow-hidden rounded-lg border border-white/10 bg-slate-950">
             <div className="border-b border-white/10 px-4 py-3 text-xs text-slate-400">
               Trusted unified diff · {proposal.provider} / {proposal.provider_model}
@@ -1429,6 +1495,95 @@ function PatchProposalPanel({
         </div>
       )}
     </section>
+  );
+}
+
+function PatchValidationPanel({
+  validation,
+}: {
+  validation: PatchValidationRun;
+}) {
+  const readinessLabel = validation.readiness.replaceAll("_", " ").toUpperCase();
+  const readinessClass =
+    validation.readiness === "ready_for_review"
+      ? "text-emerald-200 border-emerald-400/25 bg-emerald-400/10"
+      : validation.readiness === "blocked"
+        ? "text-rose-200 border-rose-400/25 bg-rose-400/10"
+        : "text-amber-100 border-amber-400/25 bg-amber-400/10";
+  return (
+    <div className="mt-4 space-y-4">
+      <div className={`rounded-lg border p-4 ${readinessClass}`}>
+        <p className="text-lg font-bold">{readinessLabel}</p>
+        <p className="mt-1 text-xs">
+          {validation.passed_count} passed · {validation.warning_count} warnings ·{" "}
+          {validation.failed_count} failed · {validation.unknown_count} unknown
+        </p>
+      </div>
+      <ValidationFindingGroup title="Contract checks" findings={validation.contract_findings} />
+      <ValidationFindingGroup title="Dependency checks" findings={validation.dependency_findings} />
+      <div>
+        <p className="text-sm font-semibold text-slate-100">
+          Related tests · {validation.related_tests.length} discovered
+        </p>
+        <div className="mt-2 grid gap-2 md:grid-cols-2">
+          {validation.related_tests.map((test) => (
+            <div key={test.file_path} className="rounded border border-white/10 bg-black/20 p-3">
+              <p className="break-all text-xs font-semibold text-cyan-100">{test.file_path}</p>
+              <p className="mt-1 text-[11px] uppercase text-cyan-300">{test.relevance} relevance</p>
+              <p className="mt-1 text-xs text-slate-400">{test.reasons.join(" ")}</p>
+            </div>
+          ))}
+        </div>
+      </div>
+      {validation.test_gaps.length > 0 && (
+        <div>
+          <p className="text-sm font-semibold text-amber-100">Test gaps</p>
+          <ul className="mt-2 space-y-1 text-xs text-amber-200">
+            {validation.test_gaps.map((gap) => <li key={gap.gap_id}>⚠ {gap.message}</li>)}
+          </ul>
+        </div>
+      )}
+      <div>
+        <p className="text-sm font-semibold text-slate-100">
+          Recommended tests · {validation.test_plan.cases.length}
+        </p>
+        <div className="mt-2 grid gap-2 md:grid-cols-2">
+          {validation.test_plan.cases.map((testCase) => (
+            <div key={`${testCase.test_type}-${testCase.target}-${testCase.title}`} className="rounded border border-white/10 bg-black/20 p-3">
+              <p className="text-[11px] font-semibold uppercase text-violet-300">{testCase.test_type} · {testCase.priority}</p>
+              <p className="mt-1 text-sm font-semibold text-white">{testCase.title}</p>
+              <p className="mt-1 break-all text-xs text-slate-400">{testCase.target}</p>
+              <p className="mt-2 text-xs text-slate-300">{testCase.expected_result}</p>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ValidationFindingGroup({
+  title,
+  findings,
+}: {
+  title: string;
+  findings: PatchValidationRun["contract_findings"];
+}) {
+  return (
+    <div>
+      <p className="text-sm font-semibold text-slate-100">{title}</p>
+      <div className="mt-2 space-y-2">
+        {findings.map((finding) => (
+          <div key={finding.check_id} className="rounded border border-white/10 bg-black/20 p-3 text-xs">
+            <p className={finding.status === "fail" ? "text-rose-200" : finding.status === "pass" ? "text-emerald-200" : "text-amber-200"}>
+              {finding.status.toUpperCase()} · {finding.message}
+            </p>
+            {finding.file_path && <p className="mt-1 break-all text-slate-500">{finding.file_path}{finding.line ? `:${finding.line}` : ""}</p>}
+            {finding.evidence && <code className="mt-1 block break-all text-slate-400">{finding.evidence}</code>}
+          </div>
+        ))}
+      </div>
+    </div>
   );
 }
 
