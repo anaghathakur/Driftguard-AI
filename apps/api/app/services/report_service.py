@@ -22,6 +22,7 @@ def build_analysis_report(
     matches = service.get_matches(analysis_id)
     risks = service.get_risk_predictions(analysis_id)
     migrations = service.get_migration_recommendations(analysis_id)
+    patches = service.get_patch_proposals(analysis_id)
     pipeline = service.get_pipeline(analysis_id)
 
     comparison_summary = analysis.comparison_summary
@@ -30,7 +31,7 @@ def build_analysis_report(
     )
 
     return AnalysisReport(
-        report_version="1.1",
+        report_version="1.2",
         generated_at=datetime.now(UTC),
         analysis=analysis,
         summary=AnalysisReportSummary(
@@ -54,10 +55,12 @@ def build_analysis_report(
             ),
             risk_predictions=len(risks),
             migration_recommendations=len(migrations),
+            patch_proposals=len(patches),
         ),
         changes=changes,
         matches=matches,
         risks=risks,
         migrations=migrations,
+        patches=patches,
         pipeline=pipeline,
     )

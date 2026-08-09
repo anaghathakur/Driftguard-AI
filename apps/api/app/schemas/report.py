@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from apps.api.app.schemas.analysis import (
     AnalysisDetail,
@@ -13,6 +13,7 @@ from apps.api.app.schemas.analysis import (
 )
 from apps.api.app.schemas.comparison import ApiChange
 from apps.api.app.schemas.migration import MigrationRecommendation
+from apps.api.app.schemas.patch import PatchProposal
 from apps.api.app.schemas.risk import RiskPrediction
 
 
@@ -30,6 +31,7 @@ class AnalysisReportSummary(BaseModel):
     max_impact_depth: int = 0
     risk_predictions: int
     migration_recommendations: int
+    patch_proposals: int = 0
 
 
 class AnalysisReport(BaseModel):
@@ -43,4 +45,5 @@ class AnalysisReport(BaseModel):
     matches: list[PersistedMatchResponse]
     risks: list[RiskPrediction]
     migrations: list[MigrationRecommendation]
+    patches: list[PatchProposal] = Field(default_factory=list)
     pipeline: list[PipelineStageResponse]

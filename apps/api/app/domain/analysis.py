@@ -18,6 +18,11 @@ class AnalysisStatus(StrEnum):
     FAILED = "failed"
 
 
+class RepositorySourceType(StrEnum):
+    ZIP = "zip"
+    GITHUB = "github"
+
+
 class PipelineStageStatus(StrEnum):
     RUNNING = "running"
     SUCCEEDED = "succeeded"
@@ -35,6 +40,9 @@ class AnalysisSubmission:
     new_file_sha256: str
     repository_file_sha256: str | None
     created_at: datetime
+    repository_source_type: RepositorySourceType | None = None
+    repository_url: str | None = None
+    repository_ref: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -57,6 +65,9 @@ class AnalysisRecord:
     comparison_summary: dict[str, object] | None
     repository_summary: dict[str, object] | None
     impact_summary: dict[str, object] | None
+    repository_source_type: RepositorySourceType | None = None
+    repository_url: str | None = None
+    repository_ref: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

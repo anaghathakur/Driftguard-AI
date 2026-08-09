@@ -10,6 +10,7 @@ from time import perf_counter
 from uuid import uuid4
 
 from apps.api.app.core.exceptions import DriftGuardError
+from apps.api.app.domain.analysis import RepositorySourceType
 from apps.api.app.domain.monitor import ApiMonitor, MonitorCheckRecord, MonitorCheckStatus
 from apps.api.app.monitoring.specification_source import OpenApiSpecificationSource
 from apps.api.app.ports.monitor_repository import ApiMonitorRepository
@@ -234,6 +235,9 @@ class MonitorCheckService:
                 new_content=specification.content,
                 repository_filename=archive.filename,
                 repository_content=archive.content,
+                repository_source_type=RepositorySourceType.GITHUB,
+                repository_url=monitor.repository_url,
+                repository_ref=archive.ref,
             )
             completed_at = self.clock()
             finished_check = replace(

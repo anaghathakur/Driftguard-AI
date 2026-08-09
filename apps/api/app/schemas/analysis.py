@@ -10,6 +10,7 @@ from apps.api.app.domain.analysis import (
     AnalysisKind,
     AnalysisStatus,
     PipelineStageStatus,
+    RepositorySourceType,
 )
 from apps.api.app.schemas.comparison import ComparisonSummary, ContractMetadata
 from apps.api.app.schemas.impact import (
@@ -26,6 +27,12 @@ class FileHashes(BaseModel):
     old_spec: str = Field(pattern=r"^[a-f0-9]{64}$")
     new_spec: str = Field(pattern=r"^[a-f0-9]{64}$")
     repository: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
+
+
+class RepositorySourceInfo(BaseModel):
+    source_type: RepositorySourceType
+    repository_url: str | None = None
+    repository_ref: str | None = None
 
 
 class AnalysisFailureResponse(BaseModel):
@@ -58,6 +65,7 @@ class AnalysisDetail(BaseModel):
     old_filename: str
     new_filename: str
     repository_filename: str | None
+    repository_source: RepositorySourceInfo | None = None
     file_hashes: FileHashes
     old_contract: ContractMetadata | None
     new_contract: ContractMetadata | None

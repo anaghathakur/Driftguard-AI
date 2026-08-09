@@ -24,6 +24,7 @@ from apps.api.app.migration.provider import (
     GeminiMigrationRecommendationProvider,
     MigrationRecommendationProvider,
     MockMigrationRecommendationProvider,
+    _send_json,
 )
 from apps.api.app.migration.service import (
     MigrationRecommendationService,
@@ -31,6 +32,12 @@ from apps.api.app.migration.service import (
 from apps.api.app.monitoring.scheduler import MonitorScheduler
 from apps.api.app.monitoring.service import ApiMonitorService, MonitorCheckService
 from apps.api.app.monitoring.specification_source import OpenApiSpecificationSource
+from apps.api.app.patches.provider import (
+    GeminiPatchGenerationProvider,
+    MockPatchGenerationProvider,
+    PatchGenerationProvider,
+)
+from apps.api.app.patches.service import PatchProposalService
 from apps.api.app.ports.analysis_repository import (
     AnalysisRepository,
 )
@@ -159,6 +166,30 @@ def get_analysis_pipeline_service(
 
 def get_github_repository_source() -> GitHubRepositorySource:
     return GitHubRepositorySource()
+
+
+@lru_cache
+def get_patch_provider() -> PatchGenerationProvider:
+    if settings.ai_provider == "gemini":
+        return GeminiPatchGenerationProvider(
+            api_key=settings.gemini_api_key,
+            model_name=settings.gemini_model,
+            timeout_seconds=settings.ai_timeout_seconds,
+            max_retries=settings.ai_max_retries,
+            sender=_send_json,
+        )
+    return MockPatchGenerationProvider()
+
+
+def get_patch_proposal_service(
+    repository: Annotated[AnalysisRepository, Depends(get_analysis_repository)],
+    provider: Annotated[PatchGenerationProvider, Depends(get_patch_provider)],
+    github_source: Annotated[
+        GitHubRepositorySource,
+        Depends(get_github_repository_source),
+    ],
+) -> PatchProposalService:
+    return PatchProposalService(repository, provider, github_source)
 
 
 def get_openapi_specification_source() -> OpenApiSpecificationSource:

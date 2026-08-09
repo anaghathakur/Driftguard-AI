@@ -17,6 +17,7 @@ from apps.api.app.domain.analysis import (
     AnalysisRecord,
     AnalysisStatus,
     AnalysisSubmission,
+    RepositorySourceType,
 )
 from apps.api.app.migration.provider import (
     MockMigrationRecommendationProvider,
@@ -37,6 +38,7 @@ from apps.api.app.schemas.analysis import (
     FileHashes,
     PersistedMatchResponse,
     PipelineStageResponse,
+    RepositorySourceInfo,
 )
 from apps.api.app.schemas.comparison import (
     ApiChange,
@@ -52,6 +54,7 @@ from apps.api.app.schemas.impact import (
     RepositoryScanSummary,
 )
 from apps.api.app.schemas.migration import MigrationRecommendation
+from apps.api.app.schemas.patch import PatchProposal
 from apps.api.app.schemas.risk import RiskPrediction
 from apps.api.app.services.comparison import SpecificationComparisonService
 
@@ -155,6 +158,9 @@ class AnalysisPipelineService:
         new_content: bytes,
         repository_filename: str,
         repository_content: bytes,
+        repository_source_type: RepositorySourceType = RepositorySourceType.ZIP,
+        repository_url: str | None = None,
+        repository_ref: str | None = None,
     ) -> ImpactAnalysisResponse:
         creation = self.repository.create_or_get(
             _submission(
@@ -165,6 +171,9 @@ class AnalysisPipelineService:
                 new_content=new_content,
                 repository_filename=repository_filename,
                 repository_content=repository_content,
+                repository_source_type=repository_source_type,
+                repository_url=repository_url,
+                repository_ref=repository_ref,
             )
         )
         if creation.duplicate:
@@ -340,6 +349,10 @@ class AnalysisPipelineService:
         if not self.repository.delete(analysis_id):
             _not_found()
 
+    def get_patch_proposals(self, analysis_id: str) -> list[PatchProposal]:
+        self._require_analysis(analysis_id)
+        return self.repository.list_patch_proposals(analysis_id)
+
     def _duplicate_comparison(self, record: AnalysisRecord) -> ComparisonResponse:
         self._raise_unless_succeeded(record)
         return self._stored_comparison(record, duplicate=True)
@@ -432,6 +445,15 @@ class AnalysisPipelineService:
             old_filename=record.old_filename,
             new_filename=record.new_filename,
             repository_filename=record.repository_filename,
+            repository_source=(
+                RepositorySourceInfo(
+                    source_type=record.repository_source_type,
+                    repository_url=record.repository_url,
+                    repository_ref=record.repository_ref,
+                )
+                if record.repository_source_type is not None
+                else None
+            ),
             file_hashes=FileHashes(
                 old_spec=record.old_file_sha256,
                 new_spec=record.new_file_sha256,
@@ -548,6 +570,9 @@ def _submission(
     new_content: bytes,
     repository_filename: str | None = None,
     repository_content: bytes | None = None,
+    repository_source_type: RepositorySourceType | None = None,
+    repository_url: str | None = None,
+    repository_ref: str | None = None,
 ) -> AnalysisSubmission:
     old_hash = hashlib.sha256(old_content).hexdigest()
     new_hash = hashlib.sha256(new_content).hexdigest()
@@ -563,6 +588,11 @@ def _submission(
             "old": old_hash,
             "new": new_hash,
             "repository": repository_hash,
+            "repository_source_type": (
+                repository_source_type.value if repository_source_type else None
+            ),
+            "repository_url": repository_url,
+            "repository_ref": repository_ref,
         },
         sort_keys=True,
         separators=(",", ":"),
@@ -579,6 +609,9 @@ def _submission(
         new_file_sha256=new_hash,
         repository_file_sha256=repository_hash,
         created_at=_utc_now(),
+        repository_source_type=repository_source_type,
+        repository_url=repository_url,
+        repository_ref=repository_ref,
     )
 
 

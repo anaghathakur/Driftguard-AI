@@ -56,6 +56,7 @@ def build_analysis_pdf(report: AnalysisReport) -> bytes:
     story.extend(_contract_block(report, styles))
     story.append(PageBreak())
     story.extend(_changes_block(report, styles))
+    story.extend(_patches_block(report, styles))
     story.extend(_pipeline_block(report, styles))
     story.extend(_disclaimer_block(styles))
 
@@ -298,6 +299,12 @@ def _summary_block(
                     escape(_overall_risk(report)),
                     styles["body"],
                 ),
+            ],
+            [
+                Paragraph("<b>Patch proposals</b>", styles["body"]),
+                Paragraph(str(summary.patch_proposals), styles["body"]),
+                Paragraph("<b>Patch application</b>", styles["body"]),
+                Paragraph("Review only; not applied", styles["body"]),
             ],
         ],
         colWidths=[42 * mm, 20 * mm, 48 * mm, 58 * mm],
@@ -769,6 +776,54 @@ def _disclaimer_block(
         Spacer(1, 5),
         Paragraph(message, styles["disclaimer"]),
     ]
+
+
+def _patches_block(
+    report: AnalysisReport,
+    styles: dict[str, ParagraphStyle],
+) -> list[Any]:
+    if not report.patches:
+        return []
+    story: list[Any] = [Paragraph("Proposed patches", styles["section"])]
+    for proposal in report.patches[:3]:
+        story.append(
+            Paragraph(
+                f"<b>{escape(_display(proposal.summary))}</b><br/>"
+                f"Status: {escape(_display(proposal.status))} | "
+                f"Provider: {escape(_display(proposal.provider))} / "
+                f"{escape(_display(proposal.provider_model))}<br/>"
+                f"Files: {proposal.files_changed} | Edits: {proposal.edit_count}",
+                styles["body"],
+            )
+        )
+        checks = proposal.validation
+        story.append(
+            Paragraph(
+                "Validation: snapshot verified, paths safe, allowed scope verified, "
+                "anchors verified, syntax valid, limits valid.",
+                styles["small"],
+            )
+        )
+        diff_lines = proposal.unified_diff.splitlines()[:40]
+        excerpt = "<br/>".join(escape(line or " ") for line in diff_lines)
+        story.append(
+            Paragraph(
+                f'<font name="Courier" size="7">{excerpt}</font>',
+                styles["small"],
+            )
+        )
+        if checks.warnings or proposal.warnings:
+            warning_text = " ".join([*checks.warnings, *proposal.warnings])[:1_000]
+            story.append(
+                Paragraph(f"Warnings: {escape(warning_text)}", styles["small"])
+            )
+    story.append(
+        Paragraph(
+            "No repository files were modified. Every patch is a review-only proposal.",
+            styles["body"],
+        )
+    )
+    return story
 
 
 def _missing_insight(

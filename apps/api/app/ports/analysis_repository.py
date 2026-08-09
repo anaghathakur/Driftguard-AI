@@ -25,6 +25,7 @@ from apps.api.app.schemas.impact import (
 from apps.api.app.schemas.migration import (
     MigrationRecommendation,
 )
+from apps.api.app.schemas.patch import PatchProposal
 from apps.api.app.schemas.risk import RiskPrediction
 
 
@@ -150,6 +151,30 @@ class AnalysisRepository(ABC):
         analysis_id: str,
     ) -> FailureRecord | None:
         """Retrieve the safe failure record."""
+
+    @abstractmethod
+    def save_patch_proposal(self, proposal: PatchProposal) -> PatchProposal:
+        """Persist a validated proposal or return its idempotent equivalent."""
+
+    @abstractmethod
+    def get_patch_proposal(
+        self,
+        analysis_id: str,
+        patch_id: str,
+    ) -> PatchProposal | None:
+        """Retrieve one patch proposal belonging to an analysis."""
+
+    @abstractmethod
+    def get_patch_by_fingerprint(
+        self,
+        analysis_id: str,
+        fingerprint: str,
+    ) -> PatchProposal | None:
+        """Retrieve an idempotent patch proposal by fingerprint."""
+
+    @abstractmethod
+    def list_patch_proposals(self, analysis_id: str) -> list[PatchProposal]:
+        """Retrieve patch proposals for one analysis."""
 
     @abstractmethod
     def delete(

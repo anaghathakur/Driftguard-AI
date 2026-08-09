@@ -168,6 +168,60 @@ export type MigrationRecommendation = {
   generated_at: string;
 };
 
+export type PatchValidationResult = {
+  source_snapshot_verified: boolean;
+  paths_safe: boolean;
+  allowed_scope_verified: boolean;
+  edit_anchors_verified: boolean;
+  syntax_valid: boolean;
+  limits_valid: boolean;
+  warnings: string[];
+};
+
+export type PatchProposal = {
+  patch_id: string;
+  analysis_id: string;
+  created_at: string;
+  status: "validated";
+  summary: string;
+  provider: "mock" | "gemini";
+  provider_model: string;
+  provider_mode: "deterministic_mock" | "external";
+  patch_profile_version: string;
+  source_repository_hash: string;
+  request_fingerprint: string;
+  files_changed: number;
+  edit_count: number;
+  validation: PatchValidationResult;
+  warnings: string[];
+  unified_diff: string;
+  redactions_applied: number;
+  files: Array<{
+    file_path: string;
+    language: string;
+    related_symbol: string | null;
+    edits: Array<{
+      expected_original: string;
+      replacement: string;
+      reason: string;
+      related_change_ids: string[];
+    }>;
+  }>;
+};
+
+export type PatchProposalListItem = Pick<
+  PatchProposal,
+  | "patch_id"
+  | "analysis_id"
+  | "created_at"
+  | "status"
+  | "summary"
+  | "provider"
+  | "provider_model"
+  | "files_changed"
+  | "edit_count"
+>;
+
 export type AnalysisReportSummary = {
   total_changes: number;
   breaking_changes: number;
@@ -180,6 +234,7 @@ export type AnalysisReportSummary = {
   max_impact_depth: number;
   risk_predictions: number;
   migration_recommendations: number;
+  patch_proposals: number;
 };
 
 export type AnalysisReport = {
@@ -191,6 +246,7 @@ export type AnalysisReport = {
   matches: PersistedMatch[];
   risks: RiskPrediction[];
   migrations: MigrationRecommendation[];
+  patches: PatchProposal[];
   pipeline: Array<Record<string, unknown>>;
 };
 
@@ -373,6 +429,37 @@ export async function getAnalysisPdf(
   }
 
   return response.blob();
+}
+
+export async function generatePatchProposal(
+  analysisId: string,
+  repository?: File | null,
+): Promise<PatchProposal> {
+  const formData = new FormData();
+  if (repository) {
+    formData.append("repository", repository);
+  }
+  return requestJson<PatchProposal>(
+    `/api/v1/analyses/${analysisId}/patches`,
+    { method: "POST", body: formData },
+  );
+}
+
+export async function getPatchProposals(
+  analysisId: string,
+): Promise<PatchProposalListItem[]> {
+  return requestJson<PatchProposalListItem[]>(
+    `/api/v1/analyses/${analysisId}/patches`,
+  );
+}
+
+export async function getPatchProposal(
+  analysisId: string,
+  patchId: string,
+): Promise<PatchProposal> {
+  return requestJson<PatchProposal>(
+    `/api/v1/analyses/${analysisId}/patches/${patchId}`,
+  );
 }
 
 export async function getMonitors(): Promise<ApiMonitor[]> {

@@ -12,6 +12,7 @@ from apps.api.app.core.dependencies import (
     get_github_repository_source,
 )
 from apps.api.app.core.exceptions import DriftGuardError
+from apps.api.app.domain.analysis import RepositorySourceType
 from apps.api.app.repository.github_source import (
     GitHubRepositorySource,
 )
@@ -105,4 +106,7 @@ async def analyze_github_impact(
         new_content=new_content,
         repository_filename=archive.filename,
         repository_content=archive.content,
+        repository_source_type=RepositorySourceType.GITHUB,
+        repository_url=repository_url,
+        repository_ref=archive.ref,
     )

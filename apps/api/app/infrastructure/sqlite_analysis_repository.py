@@ -21,12 +21,14 @@ from apps.api.app.domain.analysis import (
     FailureRecord,
     PipelineStageRecord,
     PipelineStageStatus,
+    RepositorySourceType,
     StoredMatch,
 )
 from apps.api.app.ports.analysis_repository import AnalysisRepository
 from apps.api.app.schemas.comparison import ApiChange, ComparisonResponse
 from apps.api.app.schemas.impact import ChangeImpact, ImpactSummary, RepositoryScanSummary
 from apps.api.app.schemas.migration import MigrationRecommendation
+from apps.api.app.schemas.patch import PatchProposal
 from apps.api.app.schemas.risk import RiskPrediction
 
 SCHEMA = """
@@ -43,6 +45,11 @@ CREATE TABLE IF NOT EXISTS analyses (
     repository_file_sha256 TEXT CHECK (
         repository_file_sha256 IS NULL OR length(repository_file_sha256) = 64
     ),
+    repository_source_type TEXT CHECK (
+        repository_source_type IS NULL OR repository_source_type IN ('zip', 'github')
+    ),
+    repository_url TEXT,
+    repository_ref TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     completed_at TEXT,
@@ -196,6 +203,30 @@ CREATE TABLE IF NOT EXISTS analysis_failures (
     FOREIGN KEY (analysis_id) REFERENCES analyses(analysis_id) ON DELETE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS patch_proposals (
+    patch_id TEXT PRIMARY KEY,
+    analysis_id TEXT NOT NULL,
+    request_fingerprint TEXT NOT NULL UNIQUE CHECK (length(request_fingerprint) = 64),
+    created_at TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status = 'validated'),
+    summary TEXT NOT NULL CHECK (length(summary) <= 500),
+    provider TEXT NOT NULL CHECK (provider IN ('mock', 'gemini')),
+    provider_model TEXT NOT NULL,
+    provider_mode TEXT NOT NULL CHECK (
+        provider_mode IN ('deterministic_mock', 'external')
+    ),
+    patch_profile_version TEXT NOT NULL,
+    source_repository_hash TEXT NOT NULL CHECK (length(source_repository_hash) = 64),
+    files_changed INTEGER NOT NULL CHECK (files_changed > 0),
+    edit_count INTEGER NOT NULL CHECK (edit_count > 0),
+    validation_json TEXT NOT NULL,
+    warnings_json TEXT NOT NULL,
+    unified_diff TEXT NOT NULL,
+    files_json TEXT NOT NULL,
+    redactions_applied INTEGER NOT NULL CHECK (redactions_applied >= 0),
+    FOREIGN KEY (analysis_id) REFERENCES analyses(analysis_id) ON DELETE CASCADE
+);
+
 CREATE INDEX IF NOT EXISTS idx_analyses_created_at ON analyses(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_changes_analysis ON analysis_changes(analysis_id, ordinal);
 CREATE INDEX IF NOT EXISTS idx_matches_analysis ON repository_matches(analysis_id, match_id);
@@ -204,6 +235,8 @@ CREATE INDEX IF NOT EXISTS idx_migrations_analysis
     ON migration_recommendations(analysis_id, generated_at);
 CREATE INDEX IF NOT EXISTS idx_pipeline_analysis ON pipeline_stages(analysis_id, ordinal);
 CREATE INDEX IF NOT EXISTS idx_failures_analysis ON analysis_failures(analysis_id, failure_id);
+CREATE INDEX IF NOT EXISTS idx_patches_analysis
+    ON patch_proposals(analysis_id, created_at DESC);
 """
 
 
@@ -215,6 +248,7 @@ class SQLiteAnalysisRepository(AnalysisRepository):
         self.database_path.parent.mkdir(parents=True, exist_ok=True)
         with self._connect() as connection:
             connection.executescript(SCHEMA)
+            _ensure_analysis_source_columns(connection)
             _ensure_repository_match_columns(connection)
 
     def create_or_get(self, submission: AnalysisSubmission) -> AnalysisCreation:
@@ -234,8 +268,9 @@ class SQLiteAnalysisRepository(AnalysisRepository):
                     analysis_id, kind, status, request_fingerprint,
                     old_filename, new_filename, repository_filename,
                     old_file_sha256, new_file_sha256, repository_file_sha256,
+                    repository_source_type, repository_url, repository_ref,
                     created_at, updated_at
-                ) VALUES (?, ?, 'running', ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, 'running', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     analysis_id,
@@ -247,6 +282,13 @@ class SQLiteAnalysisRepository(AnalysisRepository):
                     submission.old_file_sha256,
                     submission.new_file_sha256,
                     submission.repository_file_sha256,
+                    (
+                        submission.repository_source_type.value
+                        if submission.repository_source_type
+                        else None
+                    ),
+                    submission.repository_url,
+                    submission.repository_ref,
                     timestamp,
                     timestamp,
                 ),
@@ -710,6 +752,88 @@ class SQLiteAnalysisRepository(AnalysisRepository):
             created_at=_datetime(row["created_at"]),
         )
 
+    def save_patch_proposal(self, proposal: PatchProposal) -> PatchProposal:
+        with self._transaction() as connection:
+            existing = connection.execute(
+                "SELECT * FROM patch_proposals WHERE request_fingerprint = ?",
+                (proposal.request_fingerprint,),
+            ).fetchone()
+            if existing is not None:
+                return _patch_proposal(existing)
+            connection.execute(
+                """
+                INSERT INTO patch_proposals (
+                    patch_id, analysis_id, request_fingerprint, created_at,
+                    status, summary, provider, provider_model, provider_mode,
+                    patch_profile_version, source_repository_hash,
+                    files_changed, edit_count, validation_json, warnings_json,
+                    unified_diff, files_json, redactions_applied
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    proposal.patch_id,
+                    proposal.analysis_id,
+                    proposal.request_fingerprint,
+                    _timestamp(proposal.created_at),
+                    proposal.status.value,
+                    proposal.summary,
+                    proposal.provider.value,
+                    proposal.provider_model,
+                    proposal.provider_mode.value,
+                    proposal.patch_profile_version,
+                    proposal.source_repository_hash,
+                    proposal.files_changed,
+                    proposal.edit_count,
+                    _json(proposal.validation.model_dump(mode="json")),
+                    _json(proposal.warnings),
+                    proposal.unified_diff,
+                    _json([item.model_dump(mode="json") for item in proposal.files]),
+                    proposal.redactions_applied,
+                ),
+            )
+        return proposal
+
+    def get_patch_proposal(
+        self,
+        analysis_id: str,
+        patch_id: str,
+    ) -> PatchProposal | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT * FROM patch_proposals
+                WHERE analysis_id = ? AND patch_id = ?
+                """,
+                (analysis_id, patch_id),
+            ).fetchone()
+        return _patch_proposal(row) if row is not None else None
+
+    def get_patch_by_fingerprint(
+        self,
+        analysis_id: str,
+        fingerprint: str,
+    ) -> PatchProposal | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT * FROM patch_proposals
+                WHERE analysis_id = ? AND request_fingerprint = ?
+                """,
+                (analysis_id, fingerprint),
+            ).fetchone()
+        return _patch_proposal(row) if row is not None else None
+
+    def list_patch_proposals(self, analysis_id: str) -> list[PatchProposal]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT * FROM patch_proposals
+                WHERE analysis_id = ? ORDER BY created_at DESC, patch_id
+                """,
+                (analysis_id,),
+            ).fetchall()
+        return [_patch_proposal(row) for row in rows]
+
     def delete(self, analysis_id: str) -> bool:
         with self._transaction() as connection:
             cursor = connection.execute(
@@ -761,6 +885,38 @@ def _analysis_record(row: sqlite3.Row) -> AnalysisRecord:
         comparison_summary=_load_json(row["comparison_summary_json"]),
         repository_summary=_load_json(row["repository_summary_json"]),
         impact_summary=_load_json(row["impact_summary_json"]),
+        repository_source_type=(
+            RepositorySourceType(row["repository_source_type"])
+            if row["repository_source_type"]
+            else None
+        ),
+        repository_url=row["repository_url"],
+        repository_ref=row["repository_ref"],
+    )
+
+
+def _patch_proposal(row: sqlite3.Row) -> PatchProposal:
+    return PatchProposal.model_validate(
+        {
+            "patch_id": row["patch_id"],
+            "analysis_id": row["analysis_id"],
+            "request_fingerprint": row["request_fingerprint"],
+            "created_at": _datetime(row["created_at"]),
+            "status": row["status"],
+            "summary": row["summary"],
+            "provider": row["provider"],
+            "provider_model": row["provider_model"],
+            "provider_mode": row["provider_mode"],
+            "patch_profile_version": row["patch_profile_version"],
+            "source_repository_hash": row["source_repository_hash"],
+            "files_changed": row["files_changed"],
+            "edit_count": row["edit_count"],
+            "validation": _load_json(row["validation_json"]),
+            "warnings": _load_json(row["warnings_json"]),
+            "unified_diff": row["unified_diff"],
+            "files": _load_json(row["files_json"]),
+            "redactions_applied": row["redactions_applied"],
+        }
     )
 
 
@@ -810,6 +966,20 @@ def _safe_trace_json(trace: list[Any]) -> str:
         ]
         safe.append(data)
     return _json(safe)
+
+
+def _ensure_analysis_source_columns(connection: sqlite3.Connection) -> None:
+    columns = {
+        row[1] for row in connection.execute("PRAGMA table_info(analyses)").fetchall()
+    }
+    additions = {
+        "repository_source_type": "TEXT",
+        "repository_url": "TEXT",
+        "repository_ref": "TEXT",
+    }
+    for name, definition in additions.items():
+        if name not in columns:
+            connection.execute(f"ALTER TABLE analyses ADD COLUMN {name} {definition}")
 
 
 def _ensure_repository_match_columns(connection: sqlite3.Connection) -> None:

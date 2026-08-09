@@ -230,5 +230,30 @@ class Settings:
         3,
     )
 
+    max_patch_files: int = _positive_int(
+        "DRIFTGUARD_MAX_PATCH_FILES",
+        5,
+    )
+
+    max_patch_edits: int = _positive_int(
+        "DRIFTGUARD_MAX_PATCH_EDITS",
+        20,
+    )
+
+    max_patch_context_bytes: int = _positive_int(
+        "DRIFTGUARD_MAX_PATCH_CONTEXT_BYTES",
+        40_000,
+    )
+
+    max_patch_replacement_bytes: int = _positive_int(
+        "DRIFTGUARD_MAX_PATCH_REPLACEMENT_BYTES",
+        20_000,
+    )
+
+    max_patch_diff_bytes: int = _positive_int(
+        "DRIFTGUARD_MAX_PATCH_DIFF_BYTES",
+        100_000,
+    )
+
 
 settings = Settings()

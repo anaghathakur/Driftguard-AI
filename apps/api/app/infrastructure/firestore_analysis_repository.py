@@ -19,12 +19,14 @@ from apps.api.app.domain.analysis import (
     FailureRecord,
     PipelineStageRecord,
     PipelineStageStatus,
+    RepositorySourceType,
     StoredMatch,
 )
 from apps.api.app.ports.analysis_repository import AnalysisRepository
 from apps.api.app.schemas.comparison import ApiChange, ComparisonResponse
 from apps.api.app.schemas.impact import ChangeImpact, ImpactSummary, RepositoryScanSummary
 from apps.api.app.schemas.migration import MigrationRecommendation
+from apps.api.app.schemas.patch import PatchProposal
 from apps.api.app.schemas.risk import RiskPrediction
 
 _ANALYSES = "analyses"
@@ -37,6 +39,7 @@ _RISKS = "risks"
 _MIGRATIONS = "migrations"
 _PIPELINE = "pipeline"
 _FAILURES = "failures"
+_PATCHES = "patches"
 
 _MAX_BATCH_WRITES = 400
 _STAGE_ID_ATTEMPTS = 5
@@ -98,6 +101,13 @@ class FirestoreAnalysisRepository(AnalysisRepository):
                 "old_file_sha256": submission.old_file_sha256,
                 "new_file_sha256": submission.new_file_sha256,
                 "repository_file_sha256": submission.repository_file_sha256,
+                "repository_source_type": (
+                    submission.repository_source_type.value
+                    if submission.repository_source_type
+                    else None
+                ),
+                "repository_url": submission.repository_url,
+                "repository_ref": submission.repository_ref,
                 "created_at": submission.created_at,
                 "updated_at": submission.created_at,
                 "completed_at": None,
@@ -456,6 +466,55 @@ class FirestoreAnalysisRepository(AnalysisRepository):
             created_at=_datetime(data["created_at"]),
         )
 
+    def save_patch_proposal(self, proposal: PatchProposal) -> PatchProposal:
+        collection = self._analyses.document(proposal.analysis_id).collection(_PATCHES)
+        existing = self.get_patch_by_fingerprint(
+            proposal.analysis_id,
+            proposal.request_fingerprint,
+        )
+        if existing is not None:
+            return existing
+        collection.document(proposal.patch_id).set(proposal.model_dump(mode="python"))
+        return proposal
+
+    def get_patch_proposal(
+        self,
+        analysis_id: str,
+        patch_id: str,
+    ) -> PatchProposal | None:
+        snapshot = (
+            self._analyses.document(analysis_id)
+            .collection(_PATCHES)
+            .document(patch_id)
+            .get()
+        )
+        if not snapshot.exists:
+            return None
+        return PatchProposal.model_validate(snapshot.to_dict() or {})
+
+    def get_patch_by_fingerprint(
+        self,
+        analysis_id: str,
+        fingerprint: str,
+    ) -> PatchProposal | None:
+        collection = self._analyses.document(analysis_id).collection(_PATCHES)
+        for snapshot in collection.stream():
+            data = snapshot.to_dict() or {}
+            if data.get("request_fingerprint") == fingerprint:
+                return PatchProposal.model_validate(data)
+        return None
+
+    def list_patch_proposals(self, analysis_id: str) -> list[PatchProposal]:
+        query = (
+            self._analyses.document(analysis_id)
+            .collection(_PATCHES)
+            .order_by("created_at", direction=firestore.Query.DESCENDING)
+        )
+        return [
+            PatchProposal.model_validate(snapshot.to_dict() or {})
+            for snapshot in query.stream()
+        ]
+
     def delete(
         self,
         analysis_id: str,
@@ -614,6 +673,13 @@ def _analysis_record_from_data(data: dict[str, Any]) -> AnalysisRecord:
         comparison_summary=data.get("comparison_summary"),
         repository_summary=data.get("repository_summary"),
         impact_summary=data.get("impact_summary"),
+        repository_source_type=(
+            RepositorySourceType(data["repository_source_type"])
+            if data.get("repository_source_type")
+            else None
+        ),
+        repository_url=data.get("repository_url"),
+        repository_ref=data.get("repository_ref"),
     )
 
 

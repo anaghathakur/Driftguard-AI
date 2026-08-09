@@ -909,6 +909,22 @@ def _mask_javascript(content: str) -> str:
     return "".join(output)
 
 
+def validate_javascript_syntax(content: str) -> None:
+    """Reject reliably detectable malformed JS/TS without executing tooling."""
+
+    masked = _mask_javascript(content)
+    pairs = {"(": ")", "[": "]", "{": "}"}
+    closing = set(pairs.values())
+    stack: list[str] = []
+    for token in masked:
+        if token in pairs:
+            stack.append(pairs[token])
+        elif token in closing and (not stack or stack.pop() != token):
+            raise ValueError("unbalanced JavaScript delimiter")
+    if stack:
+        raise ValueError("unbalanced JavaScript delimiter")
+
+
 def _matching_brace(masked: str, opening: int) -> int:
     if opening < 0:
         raise ValueError("function body missing")

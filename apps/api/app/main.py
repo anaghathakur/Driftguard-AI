@@ -20,6 +20,9 @@ from apps.api.app.api.routes.migration import (
 from apps.api.app.api.routes.monitors import (
     router as monitors_router,
 )
+from apps.api.app.api.routes.patches import (
+    router as patches_router,
+)
 from apps.api.app.api.routes.risk import (
     router as risk_router,
 )
@@ -96,6 +99,10 @@ def create_app() -> FastAPI:
     )
     app.include_router(
         monitors_router,
+        prefix=settings.api_prefix,
+    )
+    app.include_router(
+        patches_router,
         prefix=settings.api_prefix,
     )
 

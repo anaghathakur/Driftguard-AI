@@ -5,10 +5,69 @@ classifies change risk with explainable local models, and keeps a local analysis
 
 ## Current milestone
 
-Phase 11 adds deeper code impact intelligence to the existing OpenAPI comparison, public GitHub
-impact analysis, monitoring, ML risk, migration guidance, persistence, reporting, and React
-dashboard. Direct lexical matching remains available, while supported repositories also receive
-bounded symbol, import, HTTP-call, and caller analysis.
+Phase 12 adds review-only proposed code patches to the existing OpenAPI comparison, deep impact
+analysis, monitoring, ML risk, migration guidance, persistence, reporting, and React dashboard.
+DriftGuard verifies the analyzed repository snapshot, accepts only structured bounded edits,
+applies them to in-memory source copies, validates them statically, and renders its own unified
+diff. It never modifies the repository.
+
+## AI-assisted proposed patch generation
+
+Patch generation is an explicit developer action on a completed repository-impact analysis. It is
+grounded in the exact contract changes, Phase 11 symbols and evidence traces, persisted migration
+recommendations, risk context, and a verified copy of the original repository snapshot.
+
+Public GitHub analyses retain the safe repository URL/ref and re-fetch through the existing
+bounded GitHub source. The fetched archive SHA-256 must equal the analyzed archive hash. Uploaded
+ZIP analyses do not persist their archive and therefore require the developer to upload the exact
+original ZIP again. A missing source returns `repository_source_required`; changed bytes return
+`repository_snapshot_mismatch` and require a new analysis.
+
+Providers return strict Pydantic-validated structured edits containing an exact original anchor,
+replacement, reason, and related contract-change IDs. Providers cannot choose their own security
+scope. Phase 12 restricts edits to direct impacted source files, rejects unsafe or unknown paths,
+requires each original anchor to exist exactly once, rejects duplicate/overlapping edits, and
+enforces file, edit, replacement, context, and diff limits. Transitive callers remain evidence but
+are not modified when the direct API client is sufficient.
+
+Validated edits are applied only to source strings held in memory. Python results must parse with
+`ast.parse`; JavaScript and TypeScript use the safe Phase 11 delimiter/token validation. DriftGuard
+then creates the unified diff with trusted standard-library code—the provider never controls diff
+paths, hunk headers, or line metadata. No repository code, tests, builds, package tools, Git
+commands, commits, branches, pushes, or pull requests are run.
+
+The deterministic mock patch provider remains the zero-cost default and conservatively supports
+removed request fields, newly required request fields, and clear removed-plus-required field
+renames. Optional Gemini generation reuses the existing credentials, timeout, and model settings;
+it receives bounded secret-redacted context with repository source explicitly labelled as hostile
+untrusted data. Every Gemini result still passes the same trusted validation.
+
+Patch proposals persist only bounded metadata, edits, validation results, provider/model/profile
+provenance, warnings, and unified diff. Repository archives and source trees remain transient.
+SQLite uses a cascading `patch_proposals` table; Firestore uses an analysis patch subcollection.
+Repeated identical requests reuse a fingerprinted proposal under patch profile `1.0.0`.
+
+The review workflow is available through:
+
+- `POST /api/v1/analyses/{analysis_id}/patches` generates or reuses a proposal; attach the
+  original `repository` ZIP for ZIP-backed analyses and omit it for GitHub-backed analyses.
+- `GET /api/v1/analyses/{analysis_id}/patches` lists proposals.
+- `GET /api/v1/analyses/{analysis_id}/patches/{patch_id}` returns full validation and diff detail.
+
+The frontend displays validation checks, an escaped line-oriented diff, provider provenance, and
+a prominent statement that no repository file was modified. JSON/PDF reports include bounded
+proposal metadata and a diff excerpt. Monitoring does not generate patches automatically, but a
+monitor-created analysis can request one manually.
+
+Phase 12 limits are configurable:
+
+```text
+DRIFTGUARD_MAX_PATCH_FILES=5
+DRIFTGUARD_MAX_PATCH_EDITS=20
+DRIFTGUARD_MAX_PATCH_CONTEXT_BYTES=40000
+DRIFTGUARD_MAX_PATCH_REPLACEMENT_BYTES=20000
+DRIFTGUARD_MAX_PATCH_DIFF_BYTES=100000
+```
 
 ## Deeper Code Impact Intelligence
 
@@ -175,6 +234,9 @@ The response includes `analysis_id` and `duplicate`. Use the ID with:
 - `GET /api/v1/analyses/{analysis_id}/pipeline`
 - `GET /api/v1/analyses/{analysis_id}/risks`
 - `GET /api/v1/analyses/{analysis_id}/risks/{change_id}`
+- `GET /api/v1/analyses/{analysis_id}/patches`
+- `GET /api/v1/analyses/{analysis_id}/patches/{patch_id}`
+- `POST /api/v1/analyses/{analysis_id}/patches`
 - `DELETE /api/v1/analyses/{analysis_id}`
 
 Use `GET /api/v1/risk/model` to inspect the active model version, artifact checksum,
@@ -218,7 +280,7 @@ dependency injection. Separate repository ports have SQLite local-default and Fi
 Deterministic contract and impact logic remains independent of scheduling and repository
 acquisition.
 
-The Phase 11 monitoring flow is:
+The Phase 12 monitoring and manual patch flow is:
 
 ```text
 create monitor -> secure OpenAPI fetch -> validate -> persist bounded V1 baseline
@@ -226,6 +288,7 @@ scheduled/manual check -> secure fetch -> compare SHA-256
   unchanged -> record check only
   changed -> GitHub impact pipeline -> semantic code graph + lexical fallback
           -> ML + migration -> persist analysis -> atomically store check + V2
+          -> developer explicitly requests snapshot-verified proposed patch
   failed -> safe check history error -> retain V1 for retry
 ```
 
@@ -238,6 +301,7 @@ SQLite contains the existing analysis tables plus two monitoring tables:
   model provenance, and probabilities;
 - `pipeline_stages` belongs to an analysis;
 - `analysis_failures` belongs to an analysis.
+- `patch_proposals` belongs to an analysis and stores bounded review-only proposal data.
 - `api_monitors` stores configuration, bounded baseline content, hashes, and latest status;
 - `monitor_checks` stores newest-first unchanged, changed, and failed check history.
 
@@ -283,3 +347,10 @@ stay below its per-document size limit. Repository archives remain transient on 
   restart the API to activate it.
 - Risk classification ranks engineering review priority; it must not be treated as an autonomous
   approval or deployment decision.
+- Patch generation is intentionally conservative and currently supports only Python,
+  JavaScript, and TypeScript files with exact textual edit anchors. Complex refactors, dynamic
+  data flow, external package graphs, formatting, semantic type checking, and repository tests
+  remain outside static validation.
+- A validated proposal is not proof that the application compiles, passes tests, or behaves
+  correctly. Developers must review and apply it manually. Automatic patch application, Git
+  commits, branches, pushes, and pull requests are not implemented.

@@ -8,6 +8,7 @@ import {
   analyzeGitHubRepositoryImpact,
   analyzeRepositoryImpact,
   compareSpecifications,
+  generatePatchProposal,
   getAnalyses,
   getAnalysisChanges,
   getAnalysisMatches,
@@ -15,6 +16,8 @@ import {
   getAnalysisReport,
   getMigrationProviderStatus,
   getMigrationRecommendations,
+  getPatchProposal,
+  getPatchProposals,
   getRiskPredictions,
   type AnalysisHistoryItem,
   type ApiChange,
@@ -22,6 +25,7 @@ import {
   type ImpactAnalysisResponse,
   type MigrationProviderStatus,
   type MigrationRecommendation,
+  type PatchProposal,
   type PersistedMatch,
   type RepositoryMatch,
   type RiskPrediction,
@@ -1183,6 +1187,10 @@ function AnalysisResultPanel({
         </div>
       )}
 
+      {result.mode === "impact" && analysisId && (
+        <PatchProposalPanel analysisId={analysisId} />
+      )}
+
       <div className="mt-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <ResultMetric
           label="Total changes"
@@ -1266,6 +1274,170 @@ function AnalysisResultPanel({
       </div>
     </section>
   );
+}
+
+function PatchProposalPanel({
+  analysisId,
+}: {
+  analysisId: string;
+}) {
+  const [repositoryZip, setRepositoryZip] =
+    useState<File | null>(null);
+  const [proposal, setProposal] =
+    useState<PatchProposal | null>(null);
+  const [isGenerating, setIsGenerating] =
+    useState(false);
+  const [patchError, setPatchError] =
+    useState<string | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    setProposal(null);
+    setPatchError(null);
+    void getPatchProposals(analysisId)
+      .then(async (items) => {
+        if (!active || items.length === 0) return;
+        const existing = await getPatchProposal(
+          analysisId,
+          items[0].patch_id,
+        );
+        if (active) setProposal(existing);
+      })
+      .catch(() => {
+        // An absent proposal should not obscure a completed analysis.
+      });
+    return () => {
+      active = false;
+    };
+  }, [analysisId]);
+
+  async function handleGeneratePatch() {
+    if (isGenerating) return;
+    setIsGenerating(true);
+    setPatchError(null);
+    try {
+      setProposal(
+        await generatePatchProposal(
+          analysisId,
+          repositoryZip,
+        ),
+      );
+    } catch (error) {
+      setPatchError(
+        error instanceof Error
+          ? error.message
+          : "No safe proposed patch could be generated.",
+      );
+    } finally {
+      setIsGenerating(false);
+    }
+  }
+
+  const validationChecks = proposal
+    ? [
+        ["Source snapshot verified", proposal.validation.source_snapshot_verified],
+        ["Allowed files verified", proposal.validation.allowed_scope_verified],
+        ["Edit anchors verified", proposal.validation.edit_anchors_verified],
+        ["Syntax valid", proposal.validation.syntax_valid],
+        ["Within safety limits", proposal.validation.limits_valid],
+      ] as const
+    : [];
+
+  return (
+    <section className="mt-6 rounded-xl border border-violet-400/20 bg-violet-400/5 p-5">
+      <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-[0.2em] text-violet-300">
+            Proposed patch
+          </p>
+          <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-300">
+            GitHub analyses securely re-fetch their source. ZIP analyses require
+            the exact original archive before DriftGuard can generate a review-only diff.
+          </p>
+        </div>
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
+          <label className="text-xs text-slate-400">
+            Original ZIP, when required
+            <input
+              type="file"
+              accept=".zip,application/zip"
+              onChange={(event) =>
+                setRepositoryZip(event.target.files?.[0] ?? null)
+              }
+              className="mt-1 block max-w-xs rounded-lg border border-white/10 bg-black/25 px-3 py-2 text-xs text-slate-300 file:mr-3 file:rounded file:border-0 file:bg-violet-400/15 file:px-2 file:py-1 file:text-violet-200"
+            />
+          </label>
+          <button
+            type="button"
+            onClick={() => void handleGeneratePatch()}
+            disabled={isGenerating}
+            className="rounded-lg bg-violet-400 px-4 py-2 text-sm font-semibold text-slate-950 transition hover:bg-violet-300 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {isGenerating ? "Generating safely..." : "Generate proposed patch"}
+          </button>
+        </div>
+      </div>
+
+      {patchError && (
+        <div className="mt-4 rounded-lg border border-rose-400/20 bg-rose-400/10 p-3 text-sm text-rose-100">
+          {patchError}
+        </div>
+      )}
+
+      {proposal && (
+        <div className="mt-5 space-y-4">
+          <div className="grid gap-3 sm:grid-cols-3">
+            <ImpactMetric label="Files changed" value={proposal.files_changed} />
+            <ImpactMetric label="Structured edits" value={proposal.edit_count} />
+            <ImpactMetric label="Status" value={proposal.status} />
+          </div>
+          <div className="rounded-lg border border-emerald-400/20 bg-emerald-400/10 p-4">
+            <p className="font-semibold text-emerald-100">{proposal.summary}</p>
+            <div className="mt-3 grid gap-2 sm:grid-cols-2">
+              {validationChecks.map(([label, passed]) => (
+                <p key={label} className="text-sm text-emerald-200">
+                  {passed ? "✓" : "×"} {label}
+                </p>
+              ))}
+            </div>
+          </div>
+          <div className="rounded-lg border border-amber-400/25 bg-amber-400/10 p-3 text-sm font-semibold text-amber-100">
+            No repository files have been modified. This diff is for developer review only.
+          </div>
+          <div className="overflow-hidden rounded-lg border border-white/10 bg-slate-950">
+            <div className="border-b border-white/10 px-4 py-3 text-xs text-slate-400">
+              Trusted unified diff · {proposal.provider} / {proposal.provider_model}
+            </div>
+            <pre className="max-h-[34rem] overflow-auto p-4 text-xs leading-5">
+              {proposal.unified_diff.split("\n").map((line, index) => (
+                <code
+                  key={`${index}-${line}`}
+                  className={`block whitespace-pre ${diffLineClass(line)}`}
+                >
+                  {line || " "}
+                </code>
+              ))}
+            </pre>
+          </div>
+          {proposal.warnings.length > 0 && (
+            <ul className="space-y-1 text-xs text-amber-200">
+              {proposal.warnings.map((warning) => (
+                <li key={warning}>• {warning}</li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function diffLineClass(line: string) {
+  if (line.startsWith("+++") || line.startsWith("---")) return "text-cyan-300";
+  if (line.startsWith("+")) return "bg-emerald-400/10 text-emerald-300";
+  if (line.startsWith("-")) return "bg-rose-400/10 text-rose-300";
+  if (line.startsWith("@@")) return "text-violet-300";
+  return "text-slate-400";
 }
 
 type ResultMetricProps = {
@@ -1507,7 +1679,7 @@ function ImpactMetric({
   value,
 }: {
   label: string;
-  value: number;
+  value: number | string;
 }) {
   return (
     <div className="rounded-lg border border-white/10 bg-black/20 px-3 py-2">
