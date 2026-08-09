@@ -4,6 +4,10 @@ import json
 from io import BytesIO
 from zipfile import ZIP_DEFLATED, ZipFile
 
+import pytest
+
+from apps.api.app.core.config import _origins
+
 
 def upload(spec, filename="api.json"):
     return (filename, json.dumps(spec).encode(), "application/json")
@@ -81,6 +85,41 @@ def test_unsupported_file_extension(client, base_spec):
 def test_health_endpoints(client):
     assert client.get("/health").json() == {"status": "ok"}
     assert client.get("/api/v1/health").json() == {"status": "ok"}
+
+    ready = client.get("/ready")
+    assert ready.status_code == 200
+    assert ready.json()["status"] == "ready"
+    assert ready.json()["checks"]["storage"] == "sqlite"
+    assert ready.json()["checks"]["github_write_provider"] == "mock"
+    assert ready.json()["issues"] == []
+    assert client.get("/api/v1/ready").json() == ready.json()
+
+
+def test_local_cors_preflight_is_allowed(client):
+    response = client.options(
+        "/api/v1/health",
+        headers={
+            "Origin": "http://localhost:5173",
+            "Access-Control-Request-Method": "GET",
+        },
+    )
+    assert response.status_code == 200
+    assert response.headers["access-control-allow-origin"] == "http://localhost:5173"
+
+
+def test_cors_origin_configuration_is_bounded(monkeypatch):
+    monkeypatch.setenv(
+        "TEST_DRIFTGUARD_ORIGINS",
+        "https://demo.example, http://localhost:5173/, https://demo.example",
+    )
+    assert _origins("TEST_DRIFTGUARD_ORIGINS", ()) == (
+        "https://demo.example",
+        "http://localhost:5173",
+    )
+
+    monkeypatch.setenv("TEST_DRIFTGUARD_ORIGINS", "*")
+    with pytest.raises(RuntimeError):
+        _origins("TEST_DRIFTGUARD_ORIGINS", ())
 
 
 def test_impact_analysis_returns_comparison_scan_and_matches(client, base_spec, clone):

@@ -113,7 +113,7 @@ export function MonitorPanel({
   }
 
   return (
-    <section className="mt-8 rounded-2xl border border-violet-400/20 bg-white/5 p-6 shadow-xl shadow-violet-950/20 backdrop-blur-xl">
+    <section id="api-monitors" className="mt-8 scroll-mt-28 rounded-2xl border border-violet-400/20 bg-white/5 p-6 shadow-xl shadow-violet-950/20 backdrop-blur-xl">
       <div>
         <p className="text-xs font-semibold uppercase tracking-[0.2em] text-violet-300">
           Automatic monitoring
@@ -137,7 +137,7 @@ export function MonitorPanel({
         </div>
       </form>
 
-      {error && <div className="mt-5 rounded-xl border border-rose-400/20 bg-rose-400/10 px-4 py-3 text-sm text-rose-200">{error}</div>}
+      {error && <div role="alert" className="mt-5 rounded-xl border border-rose-400/20 bg-rose-400/10 px-4 py-3 text-sm text-rose-200">{error}</div>}
 
       <div className="mt-6 space-y-4">
         {monitors.length === 0 ? (

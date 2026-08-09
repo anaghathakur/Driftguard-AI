@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from urllib.parse import urlsplit
 
 
 def _positive_int(
@@ -78,10 +79,49 @@ def _boolean(name: str, default: bool) -> bool:
     raise RuntimeError(f"{name} must be a boolean")
 
 
+def _origins(name: str, default: tuple[str, ...]) -> tuple[str, ...]:
+    raw_value = os.getenv(name)
+    if raw_value is None:
+        return default
+
+    origins: list[str] = []
+    for value in raw_value.split(","):
+        origin = value.strip().rstrip("/")
+        if not origin:
+            continue
+        parsed = urlsplit(origin)
+        if (
+            parsed.scheme not in {"http", "https"}
+            or not parsed.netloc
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.path
+            or parsed.query
+            or parsed.fragment
+        ):
+            raise RuntimeError(
+                f"{name} must contain comma-separated HTTP(S) origins without paths"
+            )
+        if origin not in origins:
+            origins.append(origin)
+
+    if not origins:
+        raise RuntimeError(f"{name} must contain at least one origin")
+    return tuple(origins)
+
+
 @dataclass(frozen=True, slots=True)
 class Settings:
     app_name: str = "DriftGuard AI"
     api_prefix: str = "/api/v1"
+
+    cors_allowed_origins: tuple[str, ...] = _origins(
+        "DRIFTGUARD_CORS_ALLOWED_ORIGINS",
+        (
+            "http://localhost:5173",
+            "http://127.0.0.1:5173",
+        ),
+    )
 
     storage_backend: str = (
         os.getenv(

@@ -21,6 +21,7 @@ import {
   getPatchProposals,
   getPatchValidation,
   getPatchValidations,
+  getReadinessStatus,
   getRiskPredictions,
   previewPullRequest,
   validatePatchProposal,
@@ -34,6 +35,7 @@ import {
   type PatchProposal,
   type PatchValidationRun,
   type PullRequestPreview,
+  type ReadinessStatus,
   type PersistedMatch,
   type RepositoryMatch,
   type RiskPrediction,
@@ -71,6 +73,8 @@ function App() {
 
   const [providerStatus, setProviderStatus] =
     useState<MigrationProviderStatus | null>(null);
+  const [readiness, setReadiness] =
+    useState<ReadinessStatus | null>(null);
   const [backendError, setBackendError] =
     useState(false);
 
@@ -126,21 +130,43 @@ function App() {
         ? repository !== null
         : repositoryUrl.trim().length > 0));
 
+  const analysisRequirement =
+    oldSpec === null || newSpec === null
+      ? "Select both OpenAPI files to continue."
+      : mode === "impact" && repositorySource === "upload" && repository === null
+        ? "Select the repository ZIP to continue."
+        : mode === "impact" &&
+            repositorySource === "github" &&
+            repositoryUrl.trim().length === 0
+          ? "Enter the public GitHub repository URL to continue."
+          : "Inputs ready for secure analysis.";
+
+  const analysisProgress =
+    mode === "comparison"
+      ? "Analyzing API changes..."
+      : repositorySource === "github"
+        ? "Fetching and scanning the GitHub repository..."
+        : "Scanning repository and building the dependency graph...";
+
   useEffect(() => {
     let active = true;
 
     async function loadBackendStatus() {
       try {
-        const status =
-          await getMigrationProviderStatus();
+        const [status, ready] = await Promise.all([
+          getMigrationProviderStatus(),
+          getReadinessStatus(),
+        ]);
 
         if (active) {
           setProviderStatus(status);
+          setReadiness(ready);
           setBackendError(false);
         }
       } catch {
         if (active) {
           setProviderStatus(null);
+          setReadiness(null);
           setBackendError(true);
         }
       }
@@ -363,10 +389,10 @@ function App() {
 
   return (
     <div className="min-h-screen text-slate-100">
-      <header className="border-b border-white/10 bg-black/30 backdrop-blur-xl">
-        <div className="mx-auto flex max-w-7xl items-center justify-between px-6 py-4">
+      <header className="sticky top-0 z-20 border-b border-white/10 bg-slate-950/90 backdrop-blur-xl">
+        <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-4 px-4 py-4 sm:px-6">
           <div className="flex items-center gap-3">
-            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-cyan-400 to-violet-500 font-bold text-slate-950 shadow-lg shadow-cyan-500/20">
+            <div aria-hidden="true" className="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-cyan-400 to-violet-500 font-bold text-slate-950 shadow-lg shadow-cyan-500/20">
               DG
             </div>
 
@@ -380,6 +406,13 @@ function App() {
             </div>
           </div>
 
+          <nav aria-label="Primary navigation" className="order-3 flex w-full gap-1 overflow-x-auto text-sm text-slate-300 md:order-none md:w-auto">
+            <NavLink href="#dashboard">Dashboard</NavLink>
+            <NavLink href="#new-analysis">New analysis</NavLink>
+            <NavLink href="#api-monitors">API monitors</NavLink>
+            <NavLink href="#recent-analyses">Recent analyses</NavLink>
+          </nav>
+
           <BackendBadge
             backendError={backendError}
             providerStatus={providerStatus}
@@ -387,25 +420,38 @@ function App() {
         </div>
       </header>
 
-      <main className="mx-auto max-w-7xl px-6 py-10">
-        <section className="mb-10 max-w-3xl">
+      <main id="dashboard" className="mx-auto max-w-7xl scroll-mt-28 px-4 py-8 sm:px-6 sm:py-10">
+        <section className="mb-8 max-w-4xl">
           <p className="mb-3 text-sm font-semibold uppercase tracking-[0.24em] text-cyan-300">
             API contract analysis
           </p>
 
           <h2 className="text-4xl font-bold tracking-tight text-white md:text-5xl">
-            Find breaking API changes before they reach
+            Detect breaking API changes before they break
             production.
           </h2>
 
           <p className="mt-5 max-w-2xl text-lg leading-8 text-slate-400">
-            Compare OpenAPI specifications, discover
-            impacted source files, calculate migration
-            risk, and generate actionable recommendations.
+            Turn contract drift into an explainable, human-reviewed workflow—from
+            affected source code to a statically validated Pull Request proposal.
           </p>
+
+          <div className="mt-6 flex flex-wrap gap-3">
+            <QuickLink href="#new-analysis" primary>Analyze API change</QuickLink>
+            <QuickLink href="#api-monitors">Create API monitor</QuickLink>
+            <QuickLink href="#recent-analyses">Recent analyses</QuickLink>
+          </div>
         </section>
 
-        <section className="grid gap-6 lg:grid-cols-[1fr_340px]">
+        <ol aria-label="DriftGuard workflow" className="mb-8 grid gap-3 sm:grid-cols-5">
+          <WorkflowStep number="1" label="Detect" detail="Contract drift" />
+          <WorkflowStep number="2" label="Understand" detail="Code impact + risk" />
+          <WorkflowStep number="3" label="Fix" detail="Guidance + patch" />
+          <WorkflowStep number="4" label="Validate" detail="Static checks + tests" />
+          <WorkflowStep number="5" label="Review" detail="Human-controlled PR" />
+        </ol>
+
+        <section id="new-analysis" className="scroll-mt-28 grid items-start gap-6 lg:grid-cols-[1fr_360px]">
           <div className="rounded-2xl border border-white/10 bg-white/5 p-6 shadow-2xl shadow-black/30 backdrop-blur-xl">
             <div className="mb-6">
               <h3 className="text-xl font-semibold text-white">
@@ -543,31 +589,39 @@ function App() {
             )}
 
             {analysisError && (
-              <div className="mt-5 rounded-xl border border-rose-400/20 bg-rose-400/10 px-4 py-3 text-sm text-rose-200">
+              <div role="alert" className="mt-5 rounded-xl border border-rose-400/20 bg-rose-400/10 px-4 py-3 text-sm text-rose-200">
                 {analysisError}
               </div>
             )}
 
             <div className="mt-7 flex flex-col gap-3 border-t border-white/10 pt-6 sm:flex-row sm:items-center sm:justify-between">
-              <p className="text-sm text-slate-500">
-                Inputs are processed safely by your
-                DriftGuard backend.
+              <p aria-live="polite" className="text-sm text-slate-400">
+                {isAnalyzing ? analysisProgress : analysisRequirement}
               </p>
 
               <button
                 type="button"
                 disabled={!canAnalyze}
                 onClick={() => void handleAnalyze()}
+                aria-busy={isAnalyzing}
                 className="rounded-xl bg-gradient-to-r from-cyan-400 to-violet-500 px-6 py-3 text-sm font-semibold text-slate-950 transition hover:scale-[1.01] disabled:cursor-not-allowed disabled:bg-none disabled:bg-slate-700 disabled:text-slate-400"
               >
                 {isAnalyzing
-                  ? "Analyzing..."
+                  ? analysisProgress
                   : "Analyze changes"}
               </button>
             </div>
           </div>
 
           <aside className="space-y-5">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-[0.2em] text-cyan-300">
+                System status
+              </p>
+              <h3 className="mt-2 text-lg font-semibold text-white">
+                Capability providers
+              </h3>
+            </div>
             <MetricCard
               label="Analysis engine"
               value={
@@ -578,8 +632,8 @@ function App() {
 
             <MetricCard
               label="Risk classifier"
-              value="ML enabled"
-              detail="Explainable risk prediction"
+              value={backendError ? "Unavailable" : "Ready"}
+              detail="Versioned model with deterministic fallback"
             />
 
             <MetricCard
@@ -596,6 +650,24 @@ function App() {
                   ? providerStatus.provider_model
                   : "Waiting for backend connection"
               }
+            />
+
+            <MetricCard
+              label="Patch provider"
+              value={readiness?.checks.patch_provider.toUpperCase() ?? "Checking"}
+              detail="Review-only structured edits"
+            />
+
+            <MetricCard
+              label="Test-plan provider"
+              value={readiness?.checks.test_plan_provider.toUpperCase() ?? "Checking"}
+              detail="Static discovery; tests are not executed"
+            />
+
+            <MetricCard
+              label="GitHub write provider"
+              value={readiness?.checks.github_write_provider.toUpperCase() ?? "Checking"}
+              detail="Explicit PR confirmation; no automatic merge"
             />
           </aside>
         </section>
@@ -633,6 +705,62 @@ function App() {
   );
 }
 
+function NavLink({ href, children }: { href: string; children: string }) {
+  return (
+    <a
+      href={href}
+      className="whitespace-nowrap rounded-lg px-3 py-2 transition hover:bg-white/5 hover:text-cyan-200"
+    >
+      {children}
+    </a>
+  );
+}
+
+function QuickLink({
+  href,
+  children,
+  primary = false,
+}: {
+  href: string;
+  children: string;
+  primary?: boolean;
+}) {
+  return (
+    <a
+      href={href}
+      className={`rounded-xl px-4 py-2.5 text-sm font-semibold transition ${
+        primary
+          ? "bg-gradient-to-r from-cyan-400 to-violet-500 text-slate-950 hover:brightness-110"
+          : "border border-white/10 bg-white/5 text-slate-200 hover:border-cyan-400/30 hover:text-cyan-100"
+      }`}
+    >
+      {children}
+    </a>
+  );
+}
+
+function WorkflowStep({
+  number,
+  label,
+  detail,
+}: {
+  number: string;
+  label: string;
+  detail: string;
+}) {
+  return (
+    <li className="rounded-xl border border-white/10 bg-white/[0.04] p-3">
+      <div className="flex items-center gap-2">
+        <span aria-hidden="true" className="flex h-6 w-6 items-center justify-center rounded-full bg-cyan-400/10 text-xs font-bold text-cyan-200">
+          {number}
+        </span>
+        <span className="text-sm font-semibold text-white">{label}</span>
+      </div>
+      <p className="mt-2 text-xs text-slate-500">{detail}</p>
+    </li>
+  );
+}
+
 type RecentAnalysesProps = {
   analyses: AnalysisHistoryItem[];
   isLoading: boolean;
@@ -651,7 +779,7 @@ function RecentAnalyses({
   onOpen,
 }: RecentAnalysesProps) {
   return (
-    <section className="mt-8 rounded-2xl border border-white/10 bg-white/5 p-6 shadow-xl shadow-black/20 backdrop-blur-xl">
+    <section id="recent-analyses" className="mt-8 scroll-mt-28 rounded-2xl border border-white/10 bg-white/5 p-6 shadow-xl shadow-black/20 backdrop-blur-xl">
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h3 className="text-lg font-semibold text-white">
@@ -674,13 +802,13 @@ function RecentAnalyses({
       </div>
 
       {error && (
-        <div className="mt-5 rounded-xl border border-rose-400/20 bg-rose-400/10 px-4 py-3 text-sm text-rose-200">
+        <div role="alert" className="mt-5 rounded-xl border border-rose-400/20 bg-rose-400/10 px-4 py-3 text-sm text-rose-200">
           {error}
         </div>
       )}
 
       {!error && isLoading && analyses.length === 0 && (
-        <div className="mt-8 flex min-h-36 items-center justify-center rounded-xl border border-dashed border-white/10 bg-black/20">
+        <div role="status" className="mt-8 flex min-h-36 items-center justify-center rounded-xl border border-dashed border-white/10 bg-black/20">
           <p className="text-sm text-cyan-200">
             Loading saved analyses...
           </p>
@@ -1195,11 +1323,12 @@ function AnalysisResultPanel({
         </div>
       )}
 
-      {result.mode === "impact" && analysisId && (
-        <PatchProposalPanel analysisId={analysisId} />
-      )}
-
-      <div className="mt-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+      <div id="analysis-summary" className="mt-6 scroll-mt-28">
+        <p className="text-xs font-semibold uppercase tracking-[0.2em] text-cyan-300">
+          Summary
+        </p>
+      </div>
+      <div className="mt-3 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <ResultMetric
           label="Total changes"
           value={comparison.summary.total_changes}
@@ -1246,7 +1375,16 @@ function AnalysisResultPanel({
         </div>
       )}
 
-      <div className="mt-6 space-y-5">
+      <section id="change-intelligence" className="mt-8 scroll-mt-28">
+        <div className="mb-4">
+          <p className="text-xs font-semibold uppercase tracking-[0.2em] text-emerald-300">
+            API change · deep code impact · migration
+          </p>
+          <h4 className="mt-2 text-lg font-semibold text-white">
+            Understand what changed and where it propagates
+          </h4>
+        </div>
+        <div className="space-y-5">
         {comparison.changes.length === 0 ? (
           <div className="rounded-xl border border-emerald-400/20 bg-emerald-400/10 p-4 text-sm text-emerald-200">
             No API contract changes were detected.
@@ -1279,7 +1417,12 @@ function AnalysisResultPanel({
             );
           })
         )}
-      </div>
+        </div>
+      </section>
+
+      {result.mode === "impact" && analysisId && (
+        <PatchProposalPanel analysisId={analysisId} />
+      )}
     </section>
   );
 }
@@ -1388,7 +1531,7 @@ function PatchProposalPanel({
     : [];
 
   return (
-    <section className="mt-6 rounded-xl border border-violet-400/20 bg-violet-400/5 p-5">
+    <section id="proposed-patch" className="mt-8 scroll-mt-28 rounded-xl border border-violet-400/20 bg-violet-400/5 p-5">
       <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
         <div>
           <p className="text-xs font-semibold uppercase tracking-[0.2em] text-violet-300">
@@ -1423,8 +1566,16 @@ function PatchProposalPanel({
       </div>
 
       {patchError && (
-        <div className="mt-4 rounded-lg border border-rose-400/20 bg-rose-400/10 p-3 text-sm text-rose-100">
+        <div role="alert" className="mt-4 rounded-lg border border-rose-400/20 bg-rose-400/10 p-3 text-sm text-rose-100">
           {patchError}
+        </div>
+      )}
+
+      {!proposal && !patchError && (
+        <div role="status" className="mt-4 rounded-lg border border-dashed border-white/10 bg-black/15 p-4 text-sm text-slate-400">
+          {isGenerating
+            ? "Generating a bounded proposed patch..."
+            : "No patch proposal generated yet. Analysis results remain unchanged until you explicitly request one."}
         </div>
       )}
 
@@ -1468,7 +1619,7 @@ function PatchProposalPanel({
               </button>
             </div>
             {validationError && (
-              <p className="mt-3 rounded border border-rose-400/20 bg-rose-400/10 p-3 text-sm text-rose-100">
+              <p role="alert" className="mt-3 rounded border border-rose-400/20 bg-rose-400/10 p-3 text-sm text-rose-100">
                 {validationError}
               </p>
             )}
@@ -2251,3 +2402,4 @@ function riskLevelClass(
 }
 
 export default App;
+

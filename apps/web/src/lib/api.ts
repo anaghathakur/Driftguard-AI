@@ -1,6 +1,21 @@
 const API_BASE_URL =
   import.meta.env.VITE_API_BASE_URL ?? "http://127.0.0.1:8000";
 
+export type ReadinessStatus = {
+  status: "ready" | "not_ready";
+  checks: {
+    storage: string;
+    analysis_engine: string;
+    risk_classifier: string;
+    migration_provider: string;
+    patch_provider: string;
+    test_plan_provider: string;
+    github_write_provider: string;
+    monitor_scheduler: string;
+  };
+  issues: string[];
+};
+
 export type MigrationProviderStatus = {
   configured_provider: string;
   active_provider: string;
@@ -57,6 +72,10 @@ export type RepositoryScanSummary = {
     max_impact_depth: number;
   } | null;
 };
+
+export async function getReadinessStatus(): Promise<ReadinessStatus> {
+  return requestJson<ReadinessStatus>("/ready");
+}
 
 export type ImpactTraceStep = {
   file_path: string;

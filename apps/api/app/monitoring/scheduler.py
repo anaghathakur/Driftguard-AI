@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from datetime import UTC, datetime
 
 from apps.api.app.monitoring.service import MonitorCheckService
 from apps.api.app.ports.monitor_repository import ApiMonitorRepository
+
+logger = logging.getLogger("driftguard.monitoring")
 
 
 class MonitorScheduler:
@@ -30,6 +33,7 @@ class MonitorScheduler:
             return
         self._stop_event.clear()
         self._task = asyncio.create_task(self._run(), name="driftguard-monitor-scheduler")
+        logger.info("Process-local monitor scheduler started")
 
     async def stop(self) -> None:
         if self._task is None:
@@ -37,12 +41,19 @@ class MonitorScheduler:
         self._stop_event.set()
         await self._task
         self._task = None
+        logger.info("Process-local monitor scheduler stopped")
 
     async def run_once(self, *, now: datetime | None = None) -> None:
         for monitor in self.repository.list_due(now or datetime.now(UTC)):
             try:
                 await self.check_service.check(monitor.monitor_id)
-            except Exception:
+            except Exception as exc:
+                logger.warning(
+                    "Monitor check failed monitor_id=%s error_type=%s error_code=%s",
+                    monitor.monitor_id,
+                    type(exc).__name__,
+                    getattr(exc, "code", "unexpected_error"),
+                )
                 continue
 
     async def _run(self) -> None:

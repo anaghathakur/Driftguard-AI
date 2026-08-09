@@ -1,304 +1,317 @@
 # DriftGuard AI
 
-DriftGuard AI detects API contract drift, connects changes to likely source-code usage,
-classifies change risk with explainable local models, and keeps a local analysis history.
+**Detect breaking API changes before they break production code.**
 
-## Current milestone
+DriftGuard AI is an API Change Impact & Migration Intelligence Platform that detects OpenAPI contract drift, identifies affected source code across repositories, estimates migration risk, generates migration guidance, proposes bounded code changes, validates those changes statically, discovers related tests, and prepares human-reviewed GitHub Pull Requests.
 
-Phase 14 adds an explicit, safety-gated GitHub Pull Request workflow to the existing OpenAPI
-comparison, deep impact analysis, monitoring, migration, patch, and validation pipeline. A
-developer can take an exact `READY_FOR_REVIEW` Phase 13 validation, inspect a server-derived
-confirmation, and create an idempotent review branch and Pull Request without executing repository
-code, running tests, force pushing, merging, or deploying.
+The platform is designed around one principle:
 
-## GitHub Pull Request workflow
+> API changes should be detected, understood, and reviewed before they become production failures.
 
-Pull Request creation is available only for a GitHub-backed analysis with an immutable resolved
-commit SHA, a validated Phase 12 proposal, and the exact Phase 13 validation in
-`READY_FOR_REVIEW`. `NEEDS_REVIEW` and `BLOCKED` are intentionally ineligible; there is no force
-override. ZIP-upload analyses remain supported by the existing workflows but cannot infer a
-canonical GitHub owner/repository and return `github_source_required` for PR creation.
+---
 
-The frontend performs no GitHub action on page load. The developer first selects **Create GitHub
-Pull Request**, which makes a read-only preview request and displays the repository, immutable base
-commit, deterministic `driftguard/<analysis>-<patch>` branch, file/edit counts, readiness, and the
-fact that tests were not executed. Only a second **Confirm Create Pull Request** action can invoke
-the write endpoint.
+## What DriftGuard Does
 
-Immediately before the first write, DriftGuard:
+When an upstream API changes, developers often need to manually determine:
 
-1. reloads the analysis, proposal, and exact validation and checks their relationships;
-2. resolves the configured ref and verifies it still equals the persisted immutable base SHA;
-3. re-fetches through the bounded secure GitHub archive source and verifies the analysis, patch,
-   and validation snapshot hashes;
-4. reapplies only the persisted structured edits in memory through the trusted Phase 12 validator;
-5. requires the reproduced paths and unified diff to exactly equal the validated proposal; and
-6. builds bounded commit and PR metadata from trusted contract/impact/validation fields.
+- What changed?
+- Is the change breaking?
+- Which repository files depend on it?
+- Which wrappers and callers are indirectly affected?
+- How risky is the migration?
+- What code needs to change?
+- Which tests should be reviewed?
+- Is the proposed migration ready for human review?
 
-The write provider then creates Git blobs/tree/commit from the exact verified file contents,
-creates or reconciles the deterministic review branch from the verified base commit, updates it
-with `force: false`, and opens or finds the matching Pull Request. It never updates `main`,
-`master`, or the repository default branch directly. A fingerprint over analysis, patch,
-validation, snapshot, base SHA, and pull-request profile `1.0.0` makes successful retries
-idempotent. Preparing/failed records retain enough safe state to reconcile a branch, commit, or PR
-after a partial failure or ambiguous timeout without blindly duplicating writes.
-
-Endpoints:
-
-- `GET /api/v1/analyses/{analysis_id}/patches/{patch_id}/validations/{validation_id}/pull-request/preview`
-- `POST /api/v1/analyses/{analysis_id}/patches/{patch_id}/validations/{validation_id}/pull-request`
-- `GET /api/v1/analyses/{analysis_id}/pull-requests`
-- `GET /api/v1/analyses/{analysis_id}/pull-requests/{pr_record_id}`
-
-`MockGitHubWriteProvider` is the zero-cost default and performs no network write. Real writes use
-`GitHubAppWriteProvider`: the server signs a short-lived app JWT from a configured private-key
-file, resolves the repository installation, obtains a repository-scoped installation token in
-memory, and uses GitHub REST APIs. No PAT input exists, and private keys, JWTs, installation
-tokens, and authorization headers are never stored in SQLite/Firestore, returned by APIs, sent to
-AI providers, or placed in `.env.example`.
-
-Create and install a dedicated GitHub App for a real test as follows:
-
-1. Grant only **Contents: Read and write**, **Pull requests: Read and write**, and the automatic
-   **Metadata: Read-only** repository permission. Do not grant Actions, Administration, Secrets,
-   Issues, or Members permissions.
-2. Install the app only on a dedicated demo repository such as `driftguard-demo-client`.
-3. Download its private key to a secure server-only path outside source control; do not copy the
-   key into an environment variable or this repository.
-4. Set `DRIFTGUARD_GITHUB_APP_ID`, `DRIFTGUARD_GITHUB_APP_PRIVATE_KEY_PATH`, and
-   `DRIFTGUARD_GITHUB_WRITE_PROVIDER=github_app`, then restart the API.
-5. Run a fresh GitHub-backed analysis against that demo repository, generate and validate its
-   patch, inspect the preview, and explicitly confirm creation. Stop after the PR opens; do not
-   merge it for acceptance testing.
-
-PR records contain bounded non-secret metadata in SQLite or a Firestore analysis subcollection
-and appear in JSON/PDF reports. Deleting an analysis cascades only local PR metadata; it never
-closes or deletes the real GitHub PR. DriftGuard does not execute CI or tests, post review
-comments, automatically update PRs after upstream changes, merge, deploy, or release.
-
-## Patch validation and test intelligence
-
-Validation is an explicit developer action on a Phase 12 patch. GitHub-backed analyses securely
-re-fetch through `GitHubRepositorySource`; ZIP-backed analyses require the original ZIP again.
-The archive SHA-256 must match both the analysis and patch fingerprints. DriftGuard then ignores
-the stored unified diff as an application mechanism and replays the persisted structured edits
-through the trusted Phase 12 applicator into an in-memory source snapshot. Repository files are
-never written.
-
-Under validation profile `1.0.0`, DriftGuard re-runs the Phase 11 analyzer against that patched
-snapshot and checks statically resolvable endpoint/method usage, required request fields, removed
-request fields, modified signatures, resolved callers, and patch blast radius. Python uses AST
-inspection; JavaScript and TypeScript use conservative static parsing. Dynamic payloads and
-unresolved calls produce `UNKNOWN` or warnings, not false failures. A supported stale-value case
-looks like this:
+DriftGuard connects these steps into one workflow.
 
 ```text
-POST /payments: email removed, customer_id required
-        -> proposed payment-client patch
-        -> contract checks pass
-        -> checkout still passes order["email"] into customer_id
-        -> NEEDS REVIEW
-        -> recommend unit, integration, negative, and regression tests
+API V1
+   ↓
+API V2
+   ↓
+Contract Drift Detection
+   ↓
+Breaking Change Classification
+   ↓
+Repository Impact Analysis
+   ↓
+Dependency / Caller Tracing
+   ↓
+Migration Risk Prediction
+   ↓
+Migration Guidance
+   ↓
+Proposed Code Patch
+   ↓
+Static Validation
+   ↓
+Test Intelligence
+   ↓
+Review Readiness
+   ↓
+GitHub Pull Request
+   ↓
+Human Review
 ```
 
-Test discovery recognizes Python `test_*.py`, `*_test.py`, and `tests/`, plus JavaScript/
-TypeScript `*.test.*`, `*.spec.*`, and `__tests__/`. Relevance is explainable and categorical:
-`HIGH` for direct symbols/endpoints/fields, `MEDIUM` for impacted callers, and `LOW` for a weak
-module or directory relationship. A discovered test is reported as related; DriftGuard never
-claims runtime coverage. Missing tests for impacted symbols are explicit test gaps.
+DriftGuard does **not** automatically merge or deploy code.
 
-Readiness is deterministic and cannot be selected by an AI provider:
+---
 
-- `BLOCKED` means a definite static failure such as a missing required field, a removed field
-  still sent, an incompatible caller, or an out-of-scope edit.
-- `NEEDS_REVIEW` means meaningful uncertainty, stale-value propagation, or missing direct tests.
-- `READY_FOR_REVIEW` means the bounded static checks found no blocking or meaningful unresolved
-  migration issue. It does not mean safe to deploy.
+## Product Workflow
 
-The zero-cost mock test-plan provider derives contract, unit, integration, negative, and
-regression recommendations from persisted changes and impact paths. Optional Gemini uses the same
-configured key/model and receives only bounded secret-redacted structured context—not the whole
-repository. Repository content remains hostile untrusted data, provider output is schema checked,
-and the provider cannot execute tests, request secrets, modify readiness, or modify files.
+The frontend organizes the migration workflow into five stages:
 
-Validation results persist as bounded `PatchValidationRun` records with findings, related tests,
-gaps, test cases, snapshot/profile fingerprints, and provider provenance. SQLite uses a cascading
-`patch_validation_runs` table; Firestore stores validations below the patch document. Repeated
-identical validation requests reuse the same deterministic fingerprint, and deleting an analysis
-removes its patches and validations. JSON/PDF reports and the existing patch-review UI include
-the latest bounded validation intelligence.
+### 1. Detect
 
-Endpoints:
+Compare an existing OpenAPI specification with a newer version.
 
-- `POST /api/v1/analyses/{analysis_id}/patches/{patch_id}/validations`
-- `GET /api/v1/analyses/{analysis_id}/patches/{patch_id}/validations`
-- `GET /api/v1/analyses/{analysis_id}/patches/{patch_id}/validations/{validation_id}`
+DriftGuard classifies changes as:
 
-Phase 13 limits are configurable:
+- breaking
+- potentially breaking
+- non-breaking
 
-```text
-DRIFTGUARD_TEST_PLAN_PROVIDER=mock
-DRIFTGUARD_MAX_VALIDATION_FINDINGS=100
-DRIFTGUARD_MAX_RELATED_TESTS=50
-DRIFTGUARD_MAX_TEST_PLAN_CASES=12
-DRIFTGUARD_MAX_TEST_CONTEXT_BYTES=40000
-```
+Examples include removed endpoints, newly required request fields, removed fields, and method or contract changes.
 
-Phase 13 validation itself remains static-only. It never imports repository modules, runs Python
-or JavaScript, executes tests/builds/package managers/scripts, or writes a repository. Phase 14
-may later use the already validated structured edits for an explicit review branch and PR only.
+### 2. Understand
 
-## AI-assisted proposed patch generation
+Analyze an uploaded repository ZIP or supported GitHub repository and connect contract changes to likely source-code usage.
 
-Patch generation is an explicit developer action on a completed repository-impact analysis. It is
-grounded in the exact contract changes, Phase 11 symbols and evidence traces, persisted migration
-recommendations, risk context, and a verified copy of the original repository snapshot.
-
-Public GitHub analyses retain the safe repository URL/ref and re-fetch through the existing
-bounded GitHub source. The fetched archive SHA-256 must equal the analyzed archive hash. Uploaded
-ZIP analyses do not persist their archive and therefore require the developer to upload the exact
-original ZIP again. A missing source returns `repository_source_required`; changed bytes return
-`repository_snapshot_mismatch` and require a new analysis.
-
-Providers return strict Pydantic-validated structured edits containing an exact original anchor,
-replacement, reason, and related contract-change IDs. Providers cannot choose their own security
-scope. Phase 12 restricts edits to direct impacted source files, rejects unsafe or unknown paths,
-requires each original anchor to exist exactly once, rejects duplicate/overlapping edits, and
-enforces file, edit, replacement, context, and diff limits. Transitive callers remain evidence but
-are not modified when the direct API client is sufficient.
-
-Validated edits are applied only to source strings held in memory. Python results must parse with
-`ast.parse`; JavaScript and TypeScript use the safe Phase 11 delimiter/token validation. DriftGuard
-then creates the unified diff with trusted standard-library code—the provider never controls diff
-paths, hunk headers, or line metadata. No repository code, tests, builds, package tools, Git
-commands, commits, branches, pushes, or pull requests are run.
-
-The deterministic mock patch provider remains the zero-cost default and conservatively supports
-removed request fields, newly required request fields, and clear removed-plus-required field
-renames. Optional Gemini generation reuses the existing credentials, timeout, and model settings;
-it receives bounded secret-redacted context with repository source explicitly labelled as hostile
-untrusted data. Every Gemini result still passes the same trusted validation.
-
-Patch proposals persist only bounded metadata, edits, validation results, provider/model/profile
-provenance, warnings, and unified diff. Repository archives and source trees remain transient.
-SQLite uses a cascading `patch_proposals` table; Firestore uses an analysis patch subcollection.
-Repeated identical requests reuse a fingerprinted proposal under patch profile `1.0.0`.
-
-The review workflow is available through:
-
-- `POST /api/v1/analyses/{analysis_id}/patches` generates or reuses a proposal; attach the
-  original `repository` ZIP for ZIP-backed analyses and omit it for GitHub-backed analyses.
-- `GET /api/v1/analyses/{analysis_id}/patches` lists proposals.
-- `GET /api/v1/analyses/{analysis_id}/patches/{patch_id}` returns full validation and diff detail.
-
-The frontend displays validation checks, an escaped line-oriented diff, provider provenance, and
-a prominent statement that no repository file was modified. JSON/PDF reports include bounded
-proposal metadata and a diff excerpt. Monitoring does not generate patches automatically, but a
-monitor-created analysis can request one manually.
-
-Phase 12 limits are configurable:
-
-```text
-DRIFTGUARD_MAX_PATCH_FILES=5
-DRIFTGUARD_MAX_PATCH_EDITS=20
-DRIFTGUARD_MAX_PATCH_CONTEXT_BYTES=40000
-DRIFTGUARD_MAX_PATCH_REPLACEMENT_BYTES=20000
-DRIFTGUARD_MAX_PATCH_DIFF_BYTES=100000
-```
-
-## Deeper Code Impact Intelligence
-
-DriftGuard performs deterministic static analysis for Python, JavaScript, and TypeScript source
-files. It parses repository text once, indexes functions and methods, resolves local imports and
-safe string expressions, builds a bounded call graph, and propagates API impact through callers.
-For example:
+For supported languages, DriftGuard can trace:
 
 ```text
 POST /payments
-  -> payment_client.create_payment   direct API usage, depth 0
-  -> checkout.checkout               wrapper caller, depth 1
-  -> orders.submit_order             transitive caller, depth 2
+      ↓
+payment_client.create_payment
+      ↓
+checkout.checkout
+      ↓
+order_service.submit_order
 ```
 
-Direct HTTP recognition covers common `requests`, `httpx`, client/session method calls, `fetch`,
-Axios-style methods, and object-style client requests. Endpoint resolution is intentionally
-limited to literals, local constant references, simple concatenation, and simple f-string/template
-constants. Unknown expressions are not evaluated.
+The result includes direct API usages, wrapper callers, transitive callers, evidence locations, confidence, and impact depth.
 
-Each deep match retains its source location, language, enclosing symbol, impact depth, confidence,
-and a bounded evidence trace. Exact resolved path plus HTTP method anchors are high confidence;
-deterministically resolved local callers are medium confidence. Import resolution is local and
-precision-oriented: ambiguous same-named functions are not connected.
+### 3. Fix
 
-Unsupported languages, dynamically constructed endpoints, and individual parser failures retain
-the existing lexical matcher. Exact lexical/semantic duplicates are collapsed to the strongest
-evidence, while transitive caller locations remain separate. Static-analysis summary metadata
-reports supported files, parser failures, symbols, resolved call edges, direct anchors, and
-transitive matches.
+DriftGuard generates migration guidance and can create a bounded proposed code patch.
 
-Repository code is never executed, imported, compiled, tested, or passed to Node/package tooling.
-Only bounded source-text parsing is performed. Phase 11 is not whole-program analysis and does not
-resolve package-manager graphs, runtime dependency injection, reflection, or arbitrary data flow.
+Patch generation is grounded in:
 
-Resource limits are configurable:
+- detected API changes
+- impacted source symbols
+- repository evidence
+- migration recommendations
+- migration risk
+- verified repository content
+
+The patch is a **proposal**. Repository files are not modified during generation.
+
+### 4. Validate
+
+DriftGuard reconstructs the proposed patch in memory and performs static migration checks.
+
+Validation can detect:
+
+- missing required request fields
+- removed request fields still being used
+- endpoint or HTTP-method mismatches
+- caller signature inconsistencies
+- stale-value propagation
+- edits outside the approved patch scope
+- related tests
+- test gaps
+
+Validation produces one of three readiness states:
 
 ```text
-DRIFTGUARD_MAX_CODE_SYMBOLS=10000
-DRIFTGUARD_MAX_CODE_GRAPH_EDGES=25000
-DRIFTGUARD_MAX_IMPACT_DEPTH=3
+READY_FOR_REVIEW
+NEEDS_REVIEW
+BLOCKED
 ```
 
-Global symbol/edge/anchor limit violations fail with a controlled error. Per-file parser failures
-are reported and degraded to lexical matching. Cycles are bounded with shortest-depth visitation.
-Identical Phase 11 inputs use pipeline profile `5.0.0`, preventing older shallow analyses from
-being reused as duplicates.
+`READY_FOR_REVIEW` means the bounded static checks found no blocking or meaningful unresolved migration issue.
 
-An API monitor stores a bounded OpenAPI baseline plus its SHA-256 hash, the public GitHub
-repository to inspect, and a check interval. Creation validates and stores the current contract as
-the baseline without running an impact analysis. Later checks fetch and validate the URL again:
+It does **not** mean the application is safe to deploy.
 
-- identical bytes record `unchanged` and skip GitHub, ML, and migration work;
-- changed bytes run the existing GitHub impact pipeline and link the resulting analysis;
-- a successful changed check atomically advances the baseline;
-- a failed check records a safe error and retains the old baseline for retry.
+### 5. Review
 
-Repository archives and source files are never persisted or executed. Baseline OpenAPI bytes are
-persisted because deterministic future comparison requires the original bounded document. Treat
-monitor storage as sensitive if upstream contracts contain confidential examples or descriptions.
+For eligible GitHub-backed analyses, DriftGuard can prepare a review branch and GitHub Pull Request.
 
-## Monitor API
+PR creation is:
 
-- `POST /api/v1/monitors` creates a monitor and establishes its baseline.
-- `GET /api/v1/monitors` lists monitor status.
-- `GET /api/v1/monitors/{monitor_id}` returns monitor details.
-- `PATCH /api/v1/monitors/{monitor_id}` updates configuration; changing the specification URL
-  establishes a fresh baseline without analysis.
-- `DELETE /api/v1/monitors/{monitor_id}` deletes the monitor and check history.
-- `POST /api/v1/monitors/{monitor_id}/check` checks immediately.
-- `GET /api/v1/monitors/{monitor_id}/checks` returns newest-first check history.
+- explicit
+- human-controlled
+- validation-gated
+- snapshot-verified
+- idempotent
 
-The dashboard's **API Monitors** area supports creation, enable/disable, Check now, history,
-deletion, and opening the latest successful analysis.
+DriftGuard never automatically merges or deploys the Pull Request.
 
-## Remote OpenAPI security
+---
 
-Remote specifications are HTTPS-only, bounded by `DRIFTGUARD_MAX_SPEC_FILE_BYTES`, fetched with a
-timeout and explicit redirect limit, and parsed through the existing OpenAPI validator. URLs with
-credentials, ports, fragments, localhost/private/link-local/multicast/reserved destinations, and
-cloud metadata destinations are rejected. Every redirect is revalidated and automatic redirect
-following is disabled.
+## Key Features
 
-DNS is validated before each request, but the HTTP client subsequently performs its own DNS
-resolution. A hostile authoritative DNS server could theoretically rebind between those steps.
-Production deployment should add network-level egress controls or a pinned-address transport;
-this MVP does not claim perfect DNS-rebinding resistance.
+### OpenAPI Contract Comparison
 
-## Automatic scheduler
+DriftGuard accepts OpenAPI 3.x JSON and YAML documents and performs deterministic contract comparison.
 
-The zero-cost scheduler runs inside the FastAPI process. It checks enabled monitors whose interval
-has elapsed, skips disabled/not-yet-due monitors, prevents overlapping checks within the process,
-isolates monitor failures, and stops cleanly during application shutdown. It is disabled by
-default so tests and local API startup are deterministic.
+The comparison pipeline supports local JSON Pointer `$ref` resolution and identifies API changes relevant to migration impact.
+
+---
+
+### Repository Impact Analysis
+
+Repositories can be analyzed from:
+
+- uploaded ZIP archives
+- supported public GitHub repositories
+
+Repository archives are treated as untrusted input.
+
+ZIP processing includes protections against:
+
+- path traversal
+- absolute paths
+- ZIP slip
+- encrypted files
+- symbolic/special files
+- duplicate archive paths
+- oversized archives
+- excessive compression ratios
+- excessive file counts
+- oversized individual files
+
+Repository source code is scanned in memory.
+
+It is not executed.
+
+---
+
+## Deep Code Impact Intelligence
+
+DriftGuard performs deeper static analysis for:
+
+- Python
+- JavaScript
+- TypeScript
+- JSX
+- TSX
+
+Python analysis uses AST-based inspection.
+
+JavaScript and TypeScript use conservative bounded static parsing.
+
+The analyzer identifies:
+
+- functions and methods
+- local imports
+- HTTP request anchors
+- statically resolvable URLs
+- symbol relationships
+- direct API calls
+- wrapper functions
+- transitive callers
+
+Example:
+
+```text
+POST /payments
+  -> payment_client.create_payment    direct API usage, depth 0
+  -> checkout.checkout                wrapper caller, depth 1
+  -> order_service.submit_order       transitive caller, depth 2
+```
+
+Each match can retain:
+
+- file path
+- source location
+- language
+- enclosing symbol
+- impact depth
+- confidence
+- evidence trace
+
+Unsupported or unresolved cases fall back to lexical matching where possible.
+
+Repository code is never imported, compiled, executed, tested, or passed to package tooling.
+
+---
+
+## Automatic API Monitoring
+
+DriftGuard can monitor a remote OpenAPI document for contract drift.
+
+A monitor stores:
+
+- monitor name
+- remote OpenAPI URL
+- GitHub repository
+- optional branch/tag/ref
+- check interval
+- current specification baseline
+- specification hash
+- check history
+
+The monitoring lifecycle is:
+
+```text
+Create monitor
+      ↓
+Fetch and validate current specification
+      ↓
+Store bounded baseline
+      ↓
+Future check
+      ↓
+Compare SHA-256
+      ↓
+Unchanged → record check only
+Changed   → run impact-analysis pipeline
+Failed    → retain previous baseline for retry
+```
+
+A successful changed check advances the stored baseline only after the analysis succeeds.
+
+---
+
+## Remote OpenAPI Security
+
+Remote specifications are fetched through a bounded HTTPS-only acquisition layer.
+
+DriftGuard rejects URLs containing or resolving to unsafe destinations such as:
+
+- localhost
+- private network ranges
+- link-local addresses
+- multicast/reserved ranges
+- cloud metadata destinations
+- embedded credentials
+- unsupported ports
+- URL fragments
+
+Redirects are validated individually.
+
+Remote content is bounded by configured size and timeout limits before being passed into the OpenAPI validator.
+
+DNS validation occurs before each request. Network-level egress restrictions are still recommended for stronger production isolation against DNS-rebinding scenarios.
+
+---
+
+## Automatic Scheduler
+
+The built-in monitor scheduler runs inside the FastAPI process.
+
+It:
+
+- checks enabled monitors
+- skips monitors that are not yet due
+- prevents overlapping checks within the process
+- isolates individual monitor failures
+- shuts down cleanly with the API
+
+The scheduler is disabled by default.
 
 Enable it with:
 
@@ -307,28 +320,769 @@ DRIFTGUARD_MONITOR_SCHEDULER_ENABLED=true
 DRIFTGUARD_MONITOR_POLL_SECONDS=30
 ```
 
-This scheduler is process-local. Multiple API workers can schedule the same monitor, so use one
-worker when it is enabled. A future external scheduler/worker can call the same monitor check
-service without changing the analysis pipeline.
+The current scheduler is process-local.
 
-## Run locally
+When enabled, a single API worker should be used. Distributed monitoring would require an external scheduler or worker architecture.
 
-From the repository root on Windows PowerShell:
+---
+
+## Migration Risk Prediction
+
+DriftGuard includes a local machine-learning risk classifier.
+
+The current model uses a versioned feature schema and produces:
+
+- migration-risk score
+- risk level
+- class probabilities
+- explainable top drivers
+- model provenance
+
+The selected model is Logistic Regression.
+
+The committed model is reproducible from deterministic synthetic training data.
+
+Example training configuration:
+
+```text
+Samples: 4000
+Seed: 42
+Split: 75/25 stratified
+```
+
+Current synthetic held-out evaluation:
+
+| Candidate | Accuracy | Balanced Accuracy | Macro-F1 |
+| --- | ---: | ---: | ---: |
+| Logistic Regression | 0.908000 | 0.906750 | 0.904413 |
+| Random Forest | 0.888000 | 0.886599 | 0.883029 |
+
+These numbers describe performance against generated synthetic labels only.
+
+They are **not** evidence of real-world production accuracy.
+
+Risk classification is intended to prioritize engineering review, not automatically approve migrations or deployments.
+
+---
+
+## Migration Guidance
+
+DriftGuard can generate structured migration recommendations for detected API changes.
+
+The provider system is replaceable.
+
+Supported modes include:
+
+```text
+mock
+gemini
+```
+
+The deterministic mock provider is suitable for local development and demonstrations.
+
+Optional Gemini integration receives bounded, structured, secret-redacted context rather than an entire repository.
+
+Provider output is schema validated before it enters the application.
+
+Repository content is treated as hostile untrusted data.
+
+---
+
+## Proposed Code Patches
+
+Patch generation is an explicit developer action after repository-impact analysis.
+
+DriftGuard uses the exact analyzed repository snapshot and generates structured edits containing:
+
+- target file
+- original source anchor
+- replacement source
+- reason
+- related API change
+
+The provider does not directly control Git diff metadata.
+
+Before an edit is accepted, DriftGuard verifies:
+
+- path safety
+- target file scope
+- unique original text anchor
+- duplicate edits
+- overlapping edits
+- context limits
+- replacement limits
+- diff limits
+
+Python output must remain syntactically parseable with `ast.parse`.
+
+JavaScript and TypeScript use conservative static validation.
+
+Structured edits are applied only to source strings held in memory.
+
+DriftGuard then generates the unified diff using trusted application code.
+
+No repository files are modified during patch generation.
+
+---
+
+## Patch Validation and Test Intelligence
+
+Validation is a separate explicit action.
+
+For GitHub-backed analyses, DriftGuard securely re-fetches and verifies the repository snapshot.
+
+For ZIP-backed analyses, the exact original archive must be uploaded again because repository archives are not persisted.
+
+The validated patch is reconstructed from stored structured edits rather than blindly trusting a stored diff.
+
+DriftGuard then re-runs static code intelligence against the patched in-memory repository.
+
+Validation checks can include:
+
+- required request fields
+- removed request fields
+- endpoint and method compatibility
+- modified function signatures
+- resolved callers
+- stale-value propagation
+- patch blast radius
+- edit scope
+
+Example:
+
+```text
+POST /payments
+email removed
+customer_id required
+        ↓
+payment-client patch proposed
+        ↓
+contract checks pass
+        ↓
+checkout still passes order["email"]
+into customer_id
+        ↓
+NEEDS_REVIEW
+```
+
+Dynamic or unresolved behavior produces warnings or `UNKNOWN` findings rather than false certainty.
+
+---
+
+## Test Intelligence
+
+DriftGuard discovers potentially related tests statically.
+
+Python conventions include:
+
+```text
+test_*.py
+*_test.py
+tests/
+```
+
+JavaScript and TypeScript conventions include:
+
+```text
+*.test.*
+*.spec.*
+__tests__/
+```
+
+Test relevance is classified as:
+
+```text
+HIGH
+MEDIUM
+LOW
+```
+
+A discovered test means DriftGuard found a static relationship.
+
+It does **not** mean the test was executed or that runtime coverage exists.
+
+Missing tests for important impacted symbols are reported as explicit test gaps.
+
+---
+
+## Review Readiness
+
+Patch readiness is deterministic.
+
+AI providers cannot choose the final readiness state.
+
+### BLOCKED
+
+A definite static problem exists, such as:
+
+- missing required field
+- removed field still being sent
+- incompatible caller
+- invalid patch scope
+
+### NEEDS_REVIEW
+
+Meaningful uncertainty remains, such as:
+
+- unresolved dynamic behavior
+- stale-value propagation
+- missing direct tests
+- migration uncertainty
+
+### READY_FOR_REVIEW
+
+No blocking or meaningful unresolved issue was found by the bounded static checks.
+
+`READY_FOR_REVIEW` means human review can proceed.
+
+It does not mean the patch has passed runtime tests or is safe to deploy.
+
+---
+
+## GitHub Pull Request Workflow
+
+Eligible `READY_FOR_REVIEW` patches can be turned into GitHub Pull Requests.
+
+The PR workflow requires:
+
+- GitHub-backed analysis
+- immutable resolved source commit
+- persisted patch proposal
+- exact validation relationship
+- verified repository snapshot
+- `READY_FOR_REVIEW` readiness
+
+`NEEDS_REVIEW` and `BLOCKED` validations cannot be overridden.
+
+ZIP-backed analyses can use the rest of DriftGuard but cannot automatically infer the canonical repository required for PR creation.
+
+---
+
+### Human-Controlled PR Creation
+
+The frontend first performs a read-only PR preview.
+
+The preview displays information such as:
+
+- repository
+- immutable base commit
+- deterministic branch
+- modified files
+- edit count
+- readiness
+- validation summary
+- test-execution warning
+
+Only a separate explicit confirmation can create the Pull Request.
+
+---
+
+### PR Safety Checks
+
+Immediately before GitHub write operations, DriftGuard:
+
+1. reloads the analysis, patch, and validation;
+2. verifies their relationships;
+3. verifies the configured repository base;
+4. re-fetches the trusted repository snapshot;
+5. verifies stored snapshot hashes;
+6. reconstructs the persisted patch in memory;
+7. verifies reproduced paths and diff;
+8. prepares bounded commit and Pull Request metadata.
+
+DriftGuard then creates Git objects for the verified patch.
+
+The branch name follows a deterministic DriftGuard namespace such as:
+
+```text
+driftguard/<analysis-id>-<patch-id>
+```
+
+Branch updates do not force push.
+
+The repository default branch is never modified directly.
+
+---
+
+### Idempotency
+
+The PR workflow uses a fingerprint based on:
+
+- analysis
+- patch
+- validation
+- repository snapshot
+- base commit
+- PR workflow profile
+
+Repeated creation requests can reconcile an existing DriftGuard branch, commit, or Pull Request instead of blindly creating duplicates.
+
+---
+
+## GitHub Authentication
+
+The default GitHub write provider is:
+
+```text
+mock
+```
+
+The mock provider performs no GitHub network write.
+
+Real PR creation uses a GitHub App.
+
+The server:
+
+```text
+GitHub App private key
+        ↓
+short-lived App JWT
+        ↓
+repository installation
+        ↓
+installation token
+        ↓
+GitHub REST API
+```
+
+Installation tokens exist only in memory.
+
+DriftGuard does not expose a Personal Access Token input in the frontend.
+
+Private keys, JWTs, installation tokens, and authorization headers are not persisted in analysis storage or returned through APIs.
+
+---
+
+## Optional Real GitHub App Setup
+
+For a controlled demonstration, create a dedicated GitHub App with only the repository permissions required by the workflow:
+
+```text
+Contents          Read and write
+Pull requests     Read and write
+Metadata          Read-only
+```
+
+Install it only on a dedicated demo repository.
+
+Store the private key outside the DriftGuard repository.
+
+Configure the backend using your private `.env`:
+
+```text
+DRIFTGUARD_GITHUB_APP_ID=<your-app-id>
+DRIFTGUARD_GITHUB_APP_PRIVATE_KEY_PATH=<secure-path-to-private-key>
+DRIFTGUARD_GITHUB_WRITE_PROVIDER=github_app
+```
+
+Never commit the actual private key or `.env`.
+
+For a real acceptance test:
+
+```text
+Fresh GitHub-backed analysis
+        ↓
+Generate proposed patch
+        ↓
+Validate patch
+        ↓
+READY_FOR_REVIEW
+        ↓
+Preview Pull Request
+        ↓
+Explicitly confirm
+        ↓
+Pull Request created
+```
+
+Stop after PR creation during acceptance testing.
+
+Do not merge the test Pull Request automatically.
+
+---
+
+## Persistence
+
+DriftGuard supports two persistence adapters:
+
+```text
+SQLite
+Firestore
+```
+
+SQLite is the default local persistence layer.
+
+The local database is created under:
+
+```text
+data/driftguard.sqlite3
+```
+
+unless overridden through configuration.
+
+Persisted information includes bounded records for:
+
+- analyses
+- API changes
+- repository matches
+- risk predictions
+- pipeline stages
+- failures
+- migration recommendations
+- patch proposals
+- patch validations
+- Pull Request workflow records
+- API monitors
+- monitor checks
+
+Repository archives and complete source trees remain transient.
+
+---
+
+## Reports
+
+Completed analyses can be exported as:
+
+- JSON reports
+- PDF reports
+
+Reports can contain available information from:
+
+```text
+Analysis
+API changes
+Repository impact
+Risk
+Migration guidance
+Proposed patches
+Patch validation
+Test intelligence
+GitHub Pull Request metadata
+```
+
+Report generation degrades gracefully when later workflow stages have not yet been created.
+
+---
+
+## Health and Readiness
+
+DriftGuard exposes operational endpoints:
+
+```text
+GET /health
+GET /ready
+
+GET /api/v1/health
+GET /api/v1/ready
+```
+
+`/health` reports process availability.
+
+`/ready` reports whether the application is ready to serve the configured local workflow without exposing secrets.
+
+The frontend uses readiness information to display provider and service status.
+
+---
+
+## Architecture
+
+DriftGuard is implemented as a modular FastAPI monolith with explicit service and persistence boundaries.
+
+```mermaid
+flowchart TD
+    UI[React / TypeScript Dashboard]
+
+    SPEC[OpenAPI V1 / V2]
+    MON[API Monitor]
+
+    API[FastAPI API Layer]
+    DIFF[Contract Diff Engine]
+    REPO[Secure Repository Acquisition]
+    STATIC[Static Code Intelligence]
+    ML[Migration Risk Model]
+    MIG[Migration Guidance Provider]
+    PATCH[Patch Generator]
+    VALIDATE[Patch Validator]
+    TESTS[Test Intelligence]
+    PR[GitHub PR Provider]
+
+    DB[(SQLite / Firestore)]
+
+    SPEC --> API
+    MON --> API
+    UI --> API
+
+    API --> DIFF
+    DIFF --> REPO
+    REPO --> STATIC
+    STATIC --> ML
+    STATIC --> MIG
+    MIG --> PATCH
+    PATCH --> VALIDATE
+    VALIDATE --> TESTS
+    VALIDATE --> PR
+
+    DIFF --> DB
+    STATIC --> DB
+    ML --> DB
+    MIG --> DB
+    PATCH --> DB
+    VALIDATE --> DB
+    PR --> DB
+    MON --> DB
+```
+
+Key architectural principles:
+
+```text
+Untrusted input
+      ↓
+bounded acquisition
+      ↓
+deterministic parsing
+      ↓
+structured intelligence
+      ↓
+human-controlled remediation
+```
+
+No repository code execution is required for the core pipeline.
+
+---
+
+## Technology Stack
+
+### Frontend
+
+```text
+React
+TypeScript
+Vite
+Tailwind CSS
+```
+
+### Backend
+
+```text
+Python
+FastAPI
+Pydantic
+SQLite
+Firestore adapter
+ReportLab
+```
+
+### Code Intelligence
+
+```text
+Python AST
+Static JavaScript/TypeScript analysis
+Lexical fallback
+Call-graph construction
+Impact propagation
+```
+
+### Machine Learning
+
+```text
+scikit-learn
+Logistic Regression
+versioned feature schema
+joblib artifact
+deterministic fallback
+```
+
+### AI
+
+```text
+Deterministic mock providers
+Optional Gemini provider
+Structured outputs
+Bounded context
+Secret redaction
+```
+
+### Developer Integration
+
+```text
+GitHub archive acquisition
+GitHub App authentication
+GitHub REST API
+GitHub Pull Requests
+```
+
+---
+
+## Run Locally
+
+### 1. Clone the repository
+
+```powershell
+git clone <your-repository-url>
+cd Driftguard-AI
+```
+
+### 2. Create the Python environment
+
+From the repository root:
 
 ```powershell
 python -m venv .venv
+```
+
+### 3. Install backend dependencies
+
+```powershell
 .\.venv\Scripts\python.exe -m pip install -e ".\apps\api[dev]"
+```
+
+### 4. Configure local environment
+
+Copy the example configuration if needed:
+
+```powershell
+Copy-Item .env.example .env
+```
+
+Do not commit `.env`.
+
+The default local configuration should use local persistence and mock providers so the main product workflow can run without external AI or GitHub write credentials.
+
+### 5. Start the backend
+
+```powershell
 .\.venv\Scripts\python.exe -m uvicorn apps.api.app.main:app --reload
 ```
 
-The database is created automatically at `data/driftguard.sqlite3`. Override the location
-with `DRIFTGUARD_DATABASE_PATH`; all supported settings are listed in `.env.example`.
+Backend:
 
-For zero-cost local monitoring, leave the mock migration provider enabled, create a monitor in the
-dashboard, and either use **Check now** or enable the process-local scheduler. No paid queue,
-Redis, cloud scheduler, or GitHub service is required.
+```text
+http://127.0.0.1:8000
+```
 
-Open `http://127.0.0.1:8000/docs` and use `POST /api/v1/specifications/compare`, or run the included payment demo:
+Swagger API documentation:
+
+```text
+http://127.0.0.1:8000/docs
+```
+
+Readiness:
+
+```text
+http://127.0.0.1:8000/ready
+```
+
+### 6. Install frontend dependencies
+
+Open another PowerShell window:
+
+```powershell
+cd apps\web
+npm install
+```
+
+### 7. Configure frontend API URL
+
+The frontend reads:
+
+```text
+VITE_API_BASE_URL
+```
+
+For local development:
+
+```text
+VITE_API_BASE_URL=http://127.0.0.1:8000
+```
+
+### 8. Start the frontend
+
+```powershell
+npm run dev
+```
+
+Frontend:
+
+```text
+http://localhost:5173
+```
+
+---
+
+## Demo
+
+The repository includes deterministic Payments API examples intended to demonstrate the DriftGuard workflow without relying on arbitrary third-party services.
+
+Example migration:
+
+### Payments API V1
+
+```text
+POST /payments
+
+amount
+email
+```
+
+### Payments API V2
+
+```text
+POST /payments
+
+amount
+customer_id
+```
+
+The migration can demonstrate:
+
+```text
+Contract drift
+      ↓
+Breaking change
+      ↓
+payment_client
+      ↓
+checkout
+      ↓
+order_service
+      ↓
+Risk score
+      ↓
+Migration guidance
+      ↓
+Proposed patch
+      ↓
+Patch validation
+      ↓
+Test intelligence
+      ↓
+Review readiness
+      ↓
+Mock or real GitHub PR
+```
+
+Sample repository fixtures include states intended to demonstrate both:
+
+```text
+payments-needs-review
+payments-ready
+```
+
+These fixtures are static analysis inputs.
+
+They are not executed by DriftGuard.
+
+---
+
+## Example API Comparison
+
+Sample OpenAPI files are available under:
+
+```text
+sample-data/specifications/
+```
+
+Example request from Windows PowerShell:
 
 ```powershell
 curl.exe -X POST http://127.0.0.1:8000/api/v1/specifications/compare `
@@ -336,166 +1090,416 @@ curl.exe -X POST http://127.0.0.1:8000/api/v1/specifications/compare `
   -F "new_spec=@sample-data/specifications/payments-new.yaml"
 ```
 
-For repository-aware analysis, first create the demo ZIP:
+---
+
+## Example ZIP Repository Analysis
+
+Create a demo archive:
 
 ```powershell
-Compress-Archive -Path ".\sample-data\repositories\payment-client\*" `
-  -DestinationPath "$env:TEMP\payment-client.zip" -Force
+Compress-Archive `
+  -Path ".\sample-data\repositories\payment-client\*" `
+  -DestinationPath "$env:TEMP\payment-client.zip" `
+  -Force
 ```
 
-Then use `POST /api/v1/impact/analyze` in Swagger with:
+Use:
 
-- `old_spec`: `sample-data/specifications/payments-old.yaml`
-- `new_spec`: `sample-data/specifications/payments-new.yaml`
-- `repository`: `$env:TEMP\payment-client.zip`
+```text
+POST /api/v1/impact/analyze
+```
 
-To analyze a public GitHub repository without creating a ZIP, use
-`POST /api/v1/impact/analyze/github` with:
+with:
 
-- `old_spec`: `sample-data/specifications/payments-old.yaml`
-- `new_spec`: `sample-data/specifications/payments-new.yaml`
-- `repository_url`: an HTTPS URL such as `https://github.com/owner/repository`
-- `ref`: an optional branch, tag, or commit SHA; omit it to use the default branch
+```text
+old_spec
+new_spec
+repository
+```
 
-GitHub acquisition accepts only `github.com` repository URLs, validates the archive redirect
-against `codeload.github.com`, and enforces the configured request timeout and archive byte limit.
-The downloaded ZIP remains in memory and passes through the same secure repository scanner as an
-uploaded ZIP.
+---
 
-The response includes `analysis_id` and `duplicate`. Use the ID with:
+## Example GitHub Repository Analysis
 
-- `GET /api/v1/analyses`
-- `GET /api/v1/analyses/{analysis_id}`
-- `GET /api/v1/analyses/{analysis_id}/changes`
-- `GET /api/v1/analyses/{analysis_id}/matches`
-- `GET /api/v1/analyses/{analysis_id}/pipeline`
-- `GET /api/v1/analyses/{analysis_id}/risks`
-- `GET /api/v1/analyses/{analysis_id}/risks/{change_id}`
-- `GET /api/v1/analyses/{analysis_id}/patches`
-- `GET /api/v1/analyses/{analysis_id}/patches/{patch_id}`
-- `POST /api/v1/analyses/{analysis_id}/patches`
-- `GET /api/v1/analyses/{analysis_id}/pull-requests`
-- `DELETE /api/v1/analyses/{analysis_id}`
+Use:
 
-Use `GET /api/v1/risk/model` to inspect the active model version, artifact checksum,
-candidate metrics, or deterministic fallback status.
+```text
+POST /api/v1/impact/analyze/github
+```
 
-Submitting the exact same file bytes again returns the stored result with `duplicate: true`
-and does not create another analysis. The fingerprint includes the analysis-pipeline version, so
-resubmitting a Milestone 3 request creates a new Milestone 4 analysis with risk predictions.
+with:
 
-## Verify
+```text
+old_spec
+new_spec
+repository_url
+ref
+```
+
+`ref` may be a branch, tag, or commit.
+
+GitHub acquisition validates trusted GitHub/codeload redirects and enforces repository archive limits before passing content to the secure repository scanner.
+
+---
+
+## API Areas
+
+FastAPI exposes grouped routes for:
+
+```text
+Specifications
+Impact analysis
+Analysis history
+Risk predictions
+API monitors
+Migration recommendations
+Patch proposals
+Patch validation
+Pull Requests
+Reports
+Health / readiness
+```
+
+The complete interactive API contract is available through:
+
+```text
+http://127.0.0.1:8000/docs
+```
+
+---
+
+## Analysis History
+
+Completed analyses are persisted and can be reopened from the frontend.
+
+Stored analyses include information such as:
+
+- contract changes
+- repository matches
+- risk predictions
+- pipeline execution stages
+- migration recommendations
+- patches
+- validation results
+- Pull Request records
+
+Submitting identical versioned inputs may reuse an existing analysis fingerprint instead of creating unnecessary duplicates.
+
+---
+
+## Security Model
+
+DriftGuard treats external data as untrusted.
+
+### OpenAPI input is untrusted
+
+Specifications are validated and bounded before analysis.
+
+### Repository input is untrusted
+
+Archives are scanned for path, size, type, encoding, and compression-related hazards.
+
+### Repository source is never executed
+
+DriftGuard performs static analysis only.
+
+It does not:
+
+```text
+import uploaded Python modules
+execute uploaded scripts
+run npm
+run pip
+run repository build commands
+run repository tests
+execute shell commands from repository content
+```
+
+### AI output is untrusted
+
+AI providers return structured output that is validated before use.
+
+Providers cannot directly:
+
+```text
+choose arbitrary repository paths
+bypass patch scope
+change review readiness
+execute repository code
+merge code
+deploy code
+```
+
+### Secrets are protected
+
+Sensitive credentials should remain in private local/server configuration.
+
+DriftGuard does not intentionally persist:
+
+```text
+GitHub App private keys
+GitHub App JWTs
+GitHub installation tokens
+Authorization headers
+AI API keys
+```
+
+### Patches remain proposals
+
+Patch generation does not modify the repository.
+
+### Validation remains static
+
+Validation does not claim runtime correctness.
+
+### Pull Requests require explicit confirmation
+
+The application does not create a Pull Request merely because an analysis completed.
+
+### No automatic merge or deployment
+
+Human review remains the final decision point.
+
+---
+
+## Configuration
+
+Supported backend configuration is documented in:
+
+```text
+.env.example
+```
+
+Important configuration areas include:
+
+```text
+Application / CORS
+Persistence
+Remote specification limits
+Repository limits
+Monitoring
+Static-analysis limits
+ML model
+Migration provider
+Patch provider
+Patch limits
+Validation / test-plan provider
+GitHub write provider
+GitHub App
+```
+
+Do not place real credentials in `.env.example`.
+
+Use a private `.env` or secure server environment for actual secrets.
+
+---
+
+## CORS
+
+Local frontend development supports:
+
+```text
+http://localhost:5173
+```
+
+Production frontend origins should be supplied through backend configuration rather than hard-coded into application source.
+
+---
+
+## Local Database Reset
+
+For local SQLite development, the default database is:
+
+```text
+data/driftguard.sqlite3
+```
+
+If you intentionally want a clean local demo environment:
+
+1. stop the backend;
+2. make sure no important local analysis history is needed;
+3. remove the local SQLite database;
+4. restart the API.
+
+DriftGuard does not automatically delete user data for demo resets.
+
+---
+
+## Reports
+
+JSON report:
+
+```text
+GET /api/v1/analyses/{analysis_id}/report
+```
+
+PDF report:
+
+```text
+GET /api/v1/analyses/{analysis_id}/report.pdf
+```
+
+Reports may include available analysis, impact, risk, migration, patch, validation, and Pull Request information.
+
+---
+
+## Testing
+
+Run the complete backend suite:
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest -c apps/api/pyproject.toml apps/api/tests
-.\.venv\Scripts\python.exe -m ruff check --config apps/api/pyproject.toml apps/api
 ```
 
-## Train the local risk model
+Run Ruff:
 
-The committed `v1.0.0` artifact is reproducible from generated synthetic data:
+```powershell
+.\.venv\Scripts\python.exe -m ruff check --config apps/api/pyproject.toml apps/api/app apps/api/tests
+```
+
+Frontend lint:
+
+```powershell
+cd apps\web
+npm run lint
+```
+
+Frontend production build:
+
+```powershell
+npm run build
+```
+
+Check Git whitespace/errors:
+
+```powershell
+git diff --check
+```
+
+The final product lifecycle tests cover a deterministic flow through contract comparison, repository impact, migration intelligence, patch generation, validation, and review workflow without requiring repository execution.
+
+---
+
+## Training the Local Risk Model
+
+The committed model can be reproduced with:
 
 ```powershell
 .\.venv\Scripts\python.exe -m apps.api.app.risk.training
 ```
 
-Defaults are 4,000 samples, seed `42`, a stratified 75/25 split, and output under
-`apps/api/models/risk/v1.0.0`. Metadata records the dataset hash, artifact hash, split,
-feature schema, and training-library versions. The current held-out synthetic metrics are:
+The training process uses deterministic synthetic data and records information such as:
 
-| Candidate | Accuracy | Balanced accuracy | Macro-F1 |
-| --- | ---: | ---: | ---: |
-| Logistic Regression | 0.908000 | 0.906750 | 0.904413 |
-| Random Forest | 0.888000 | 0.886599 | 0.883029 |
+- dataset hash
+- model artifact hash
+- feature schema
+- split configuration
+- training-library versions
 
-Logistic Regression is selected by macro-F1. These metrics describe generated synthetic labels
-only; they are not evidence of production accuracy or business impact.
+The artifact is checksum verified before use.
 
-## Architecture direction
+Only trusted locally configured model artifacts should be loaded because serialized joblib artifacts can execute Python while loading.
 
-The MVP is a modular monolith. FastAPI routes receive analysis and monitoring services through
-dependency injection. Separate repository ports have SQLite local-default and Firestore adapters.
-Deterministic contract and impact logic remains independent of scheduling and repository
-acquisition.
+---
 
-The Phase 14 monitoring and human-controlled review flow is:
+## Deployment
+
+DriftGuard can always run as a local single-instance application.
+
+A production-style build consists of:
 
 ```text
-create monitor -> secure OpenAPI fetch -> validate -> persist bounded V1 baseline
-scheduled/manual check -> secure fetch -> compare SHA-256
-  unchanged -> record check only
-  changed -> GitHub impact pipeline -> semantic code graph + lexical fallback
-          -> ML + migration -> persist analysis -> atomically store check + V2
-          -> developer explicitly requests snapshot-verified proposed patch
-          -> developer validates patch -> READY_FOR_REVIEW
-          -> developer previews and explicitly confirms GitHub Pull Request
-  failed -> safe check history error -> retain V1 for retry
+FastAPI backend
+React production build
+environment-specific configuration
+persistent database adapter
 ```
 
-SQLite contains the existing analysis tables plus two monitoring tables:
+Frontend production bundle:
 
-- `analyses` owns metadata, hashes, fingerprints, summaries, and lifecycle timestamps;
-- `analysis_changes` belongs to an analysis;
-- `repository_matches` belongs to a persisted change;
-- `risk_predictions` belongs to a persisted change and stores features, scores, explanations,
-  model provenance, and probabilities;
-- `pipeline_stages` belongs to an analysis;
-- `analysis_failures` belongs to an analysis.
-- `patch_proposals` belongs to an analysis and stores bounded review-only proposal data.
-- `patch_validation_runs` belongs to an exact proposal and stores static validation intelligence.
-- `github_pull_request_records` stores bounded non-secret preparing/created/failed workflow state.
-- `api_monitors` stores configuration, bounded baseline content, hashes, and latest status;
-- `monitor_checks` stores newest-first unchanged, changed, and failed check history.
+```powershell
+cd apps\web
+npm run build
+```
 
-Firestore stores the same monitor records and splits bounded baseline bytes into subdocuments to
-stay below its per-document size limit. Repository archives remain transient on both backends.
+Backend production startup can use the FastAPI application entrypoint with an appropriate ASGI server configuration.
 
-## Current limitations
+Important deployment considerations:
 
-- Only OpenAPI 3.x is accepted.
-- Only local JSON Pointer `$ref` values are resolved; remote references are rejected.
-- Schema comparison currently focuses on object properties relevant to the MVP, including nested properties represented as dotted paths.
-- Repository acquisition supports uploaded ZIPs and public GitHub archives. GitHub App writes are
-  limited to repositories where the app is explicitly installed; private archive acquisition and
-  end-user SaaS installation onboarding are not included.
-- Remote OpenAPI monitoring requires a publicly reachable HTTPS endpoint; private/internal API
-  endpoints are intentionally rejected by SSRF controls.
-- The process-local scheduler is suitable for a single-worker MVP, not distributed scheduling.
-- Pre-request DNS validation has a residual DNS-rebinding window; production should also enforce
-  network-level egress restrictions.
-- Matching is deterministic and lexical. It recognizes literal/templated paths, nearby HTTP
-  methods, and operation IDs for all scanned extensions. Python, JavaScript, and TypeScript add
-  bounded semantic analysis, but runtime URL construction and external package graphs remain
-  unresolved.
-- Server route declarations can look like client usage and may be reported as matches.
-- UTF-8 source files in the configured extension allowlist are scanned; binary, non-UTF-8,
-  dependency, generated, oversized, and unsupported files are skipped or rejected as appropriate.
-- Matches are capped at 100 locations per contract change.
-- Duplicate detection is byte-based. Repacking identical source files can change ZIP metadata
-  and therefore produces a different repository hash and fingerprint.
-- Failed duplicate submissions replay the stored safe error; delete the failed analysis before
-  intentionally retrying the exact same bytes.
-- SQLite schema initialization is automatic, but migrations and multi-database support are not
-  included yet.
-- The API has no authentication or multi-tenant isolation and is intended for trusted local use.
-- Analysis execution is synchronous; SQLite is appropriate for this local milestone, not a
-  horizontally scaled deployment.
-- Risk-model labels are synthetic and encode the initial engineering risk policy. Real-world
-  calibration and outcome-based validation are not implemented yet.
-- Historical analyses created before Milestone 4 are retained but are not backfilled; their risk
-  endpoints return an empty list until the inputs are resubmitted under the versioned pipeline.
-- Joblib artifacts can execute Python during loading. DriftGuard loads only the configured local
-  artifact, verifies its SHA-256 against metadata, and must never be pointed at an untrusted file.
-- A failed model load is cached for the process lifetime; install or replace the artifact and
-  restart the API to activate it.
-- Risk classification ranks engineering review priority; it must not be treated as an autonomous
-  approval or deployment decision.
-- Patch generation is intentionally conservative and currently supports only Python,
-  JavaScript, and TypeScript files with exact textual edit anchors. Complex refactors, dynamic
-  data flow, external package graphs, formatting, semantic type checking, and repository tests
-  remain outside static validation.
-- A validated proposal or created PR is not proof that the application compiles, passes tests, or
-  behaves correctly. Phase 14 creates only an explicitly confirmed review branch and PR from the
-  exact validated patch; test execution, force push, automatic merge, deployment, and ongoing PR
-  synchronization are not implemented. Historical GitHub analyses without an immutable source
-  commit remain readable but must be rerun before they are eligible for PR creation.
+```text
+Configure allowed CORS origins
+Protect application access
+Store credentials outside source control
+Use one worker when process-local monitoring is enabled
+Provide network-level egress controls for stronger SSRF protection
+Use persistent storage appropriate for the deployment model
+```
+
+The built-in scheduler and SQLite configuration are designed primarily for a single-instance MVP.
+
+Distributed workers, queues, and production orchestration are intentionally outside the current implementation.
+
+---
+
+## Known Limitations
+
+DriftGuard AI is a secure-conscious MVP focused on static API migration intelligence and human-reviewed remediation. Its current boundaries are intentional:
+
+- **API coverage:** OpenAPI 3.x is supported. Local JSON Pointer `$ref` values are resolved, while remote references and some advanced schema-comparison cases are outside the current scope.
+
+- **Repository intelligence:** Python, JavaScript, and TypeScript receive deeper static analysis. Other supported source files use lexical matching. Dynamically constructed URLs, reflection, runtime dependency injection, and external package graphs may not be fully resolved.
+
+- **Repository acquisition:** DriftGuard supports uploaded ZIP archives and public GitHub repositories. Full private-repository SaaS onboarding is not yet implemented.
+
+- **Static validation only:** Repository source code, builds, package managers, and tests are never executed. Patch validation therefore provides migration confidence and review readiness, not a guarantee that the application compiles or behaves correctly at runtime.
+
+- **Monitoring:** The built-in scheduler is process-local and intended for a single-worker MVP. Distributed scheduling and webhook-driven monitoring are future capabilities.
+
+- **ML risk scoring:** The current risk model is trained and evaluated on deterministic synthetic data. Scores should be used to prioritize engineering review, not as autonomous approval or deployment decisions.
+
+- **Deployment model:** SQLite is appropriate for local and single-instance demonstrations. Firestore is available as an alternative persistence adapter, but authentication, multi-tenancy, distributed workers, and production-scale orchestration are outside the MVP.
+
+- **GitHub remediation:** DriftGuard can prepare an explicitly confirmed review branch and Pull Request from a validated patch. It never automatically merges, deploys, releases, or modifies the repository default branch.
+
+---
+
+## Post-MVP Roadmap
+
+Potential next steps include:
+
+- GitHub App onboarding for private repositories
+- Authentication, organizations, and multi-tenancy
+- Webhook-driven API and repository monitoring
+- Sandboxed CI and test execution
+- Additional programming-language analyzers
+- Distributed monitoring workers
+- Pull Request status synchronization and review feedback
+- Real-world calibration of the migration-risk model
+- Organization-level migration and security policies
+
+---
+
+## Project Summary
+
+**DriftGuard AI — API Change Impact & Migration Intelligence Platform**
+
+Built as a developer platform that monitors OpenAPI contracts for breaking changes, performs static repository dependency analysis across Python, JavaScript, and TypeScript, predicts migration risk, generates migration guidance and bounded code patches, performs static patch validation and test discovery, and prepares human-reviewed GitHub Pull Requests.
+
+Core technologies:
+
+```text
+FastAPI
+React
+TypeScript
+Python
+Python AST
+Static code analysis
+Machine Learning
+GitHub API / GitHub App
+SQLite
+Firestore
+Gemini integration
+OpenAPI
+```
+
+DriftGuard is currently a **credible, security-conscious, demonstrable MVP** rather than a claim of production-ready autonomous software maintenance.

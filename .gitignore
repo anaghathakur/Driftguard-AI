@@ -13,3 +13,7 @@ build/
 data/
 *.egg-info/
 .DS_Store
+
+node_modules/
+*.pem
+*.key

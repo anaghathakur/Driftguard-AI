@@ -761,7 +761,13 @@ def _patches_block(
     styles: dict[str, ParagraphStyle],
 ) -> list[Any]:
     if not report.patches:
-        return []
+        return [
+            Paragraph("Proposed patch", styles["section"]),
+            Paragraph(
+                "No patch proposal was generated for this analysis.",
+                styles["body"],
+            ),
+        ]
     story: list[Any] = [Paragraph("Proposed patches", styles["section"])]
     for proposal in report.patches[:3]:
         story.append(
@@ -807,7 +813,13 @@ def _patch_validations_block(
     styles: dict[str, ParagraphStyle],
 ) -> list[Any]:
     if not report.patch_validations:
-        return []
+        return [
+            Paragraph("Patch validation", styles["section"]),
+            Paragraph(
+                "No static patch validation was run for this analysis.",
+                styles["body"],
+            ),
+        ]
     story: list[Any] = [Paragraph("Patch validation", styles["section"])]
     for validation in report.patch_validations[:3]:
         story.append(
@@ -860,8 +872,14 @@ def _pull_requests_block(
     styles: dict[str, ParagraphStyle],
 ) -> list[Any]:
     if not report.pull_requests:
-        return []
-    story: list[Any] = [Paragraph("GitHub pull requests", styles["section"])]
+        return [
+            Paragraph("GitHub Pull Request", styles["section"]),
+            Paragraph(
+                "No Pull Request was created for this analysis.",
+                styles["body"],
+            ),
+        ]
+    story: list[Any] = [Paragraph("GitHub Pull Request", styles["section"])]
     for record in report.pull_requests[:5]:
         number = f"#{record.pull_request_number}" if record.pull_request_number else "Pending"
         url = escape(record.pull_request_url or "Not yet created")

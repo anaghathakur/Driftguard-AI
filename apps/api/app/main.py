@@ -1,5 +1,6 @@
 """DriftGuard AI FastAPI application factory."""
 
+import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -41,23 +42,50 @@ from apps.api.app.core.exceptions import (
     register_exception_handlers,
 )
 
+logger = logging.getLogger("driftguard.lifecycle")
+
+OPENAPI_TAGS = [
+    {"name": "operations", "description": "Process health and configuration readiness."},
+    {"name": "specifications", "description": "OpenAPI contract comparison."},
+    {"name": "impact", "description": "Repository-aware change-impact analysis."},
+    {"name": "analyses", "description": "Persisted analyses, insights, and reports."},
+    {"name": "risk", "description": "Risk-model provenance and status."},
+    {"name": "migration", "description": "Migration-provider status."},
+    {"name": "monitors", "description": "Process-local API contract monitoring."},
+    {"name": "patches", "description": "Review-only proposed code patches."},
+    {"name": "patch validations", "description": "Static validation and test intelligence."},
+    {"name": "pull requests", "description": "Explicit, validated GitHub PR workflow."},
+]
+
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     get_default_analysis_repository()
     get_default_monitor_repository()
     scheduler = get_monitor_scheduler()
+    logger.info(
+        "DriftGuard starting storage=%s scheduler=%s github_write_provider=%s",
+        settings.storage_backend,
+        "enabled" if scheduler.enabled else "disabled",
+        settings.github_write_provider,
+    )
     scheduler.start()
     try:
         yield
     finally:
         await scheduler.stop()
+        logger.info("DriftGuard stopped cleanly")
 
 
 def create_app() -> FastAPI:
     app = FastAPI(
         title=settings.app_name,
         version="0.1.0",
+        description=(
+            "Detect OpenAPI drift, trace repository impact, generate and statically validate "
+            "review-only migration patches, and explicitly prepare human-review Pull Requests."
+        ),
+        openapi_tags=OPENAPI_TAGS,
         lifespan=lifespan,
     )
 
@@ -65,10 +93,7 @@ def create_app() -> FastAPI:
 
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=[
-            "http://localhost:5173",
-            "http://127.0.0.1:5173",
-        ],
+        allow_origins=list(settings.cors_allowed_origins),
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
