@@ -58,6 +58,7 @@ def build_analysis_pdf(report: AnalysisReport) -> bytes:
     story.extend(_changes_block(report, styles))
     story.extend(_patches_block(report, styles))
     story.extend(_patch_validations_block(report, styles))
+    story.extend(_pull_requests_block(report, styles))
     story.extend(_pipeline_block(report, styles))
     story.extend(_disclaimer_block(styles))
 
@@ -415,13 +416,8 @@ def _changes_block(
     for match in report.matches:
         matches_by_change[match.change_id].append(match)
 
-    risks_by_change = {
-        risk.change_id: risk for risk in report.risks
-    }
-    migrations_by_change = {
-        migration.change_id: migration
-        for migration in report.migrations
-    }
+    risks_by_change = {risk.change_id: risk for risk in report.risks}
+    migrations_by_change = {migration.change_id: migration for migration in report.migrations}
 
     for index, change in enumerate(report.changes, start=1):
         story.append(Spacer(1, 5))
@@ -432,10 +428,7 @@ def _changes_block(
                 color=BORDER,
             )
         )
-        title = (
-            f"{index}. {escape(_display(change.method))} "
-            f"{escape(_display(change.path))}"
-        )
+        title = f"{index}. {escape(_display(change.method))} {escape(_display(change.path))}"
         story.append(Paragraph(title, styles["change_title"]))
 
         classification = (
@@ -474,8 +467,7 @@ def _changes_block(
             story.extend(
                 _missing_insight(
                     "ML risk assessment",
-                    "No persisted risk prediction exists for this "
-                    "historical analysis.",
+                    "No persisted risk prediction exists for this historical analysis.",
                     styles,
                 )
             )
@@ -487,8 +479,7 @@ def _changes_block(
             story.extend(
                 _missing_insight(
                     "Migration plan",
-                    "No persisted migration recommendation exists for "
-                    "this historical analysis.",
+                    "No persisted migration recommendation exists for this historical analysis.",
                     styles,
                 )
             )
@@ -530,10 +521,7 @@ def _source_impact(
     )
 
     for match in matches:
-        location = (
-            f"{_display(match.file_path)} - line {match.line}, "
-            f"column {match.column}"
-        )
+        location = f"{_display(match.file_path)} - line {match.line}, column {match.column}"
         details = (
             f"<b>{escape(location)}</b><br/>"
             f"Match: {escape(_display(match.match_kind))} | "
@@ -577,10 +565,7 @@ def _risk_block(
     story: list[Any] = [
         Paragraph("ML risk assessment", styles["section"]),
     ]
-    model = (
-        f"{_display(risk.model_name)} "
-        f"{_display(risk.model_version)}"
-    ).strip()
+    model = (f"{_display(risk.model_name)} {_display(risk.model_version)}").strip()
     rows = [
         [
             Paragraph("<b>Risk level</b>", styles["small"]),
@@ -625,9 +610,7 @@ def _risk_block(
         story.append(Paragraph("Why this is risky", styles["body"]))
         story.extend(_bullet_items(reasons, styles))
 
-    fallback_reason = _display(
-        getattr(risk, "fallback_reason", "")
-    )
+    fallback_reason = _display(getattr(risk, "fallback_reason", ""))
     if fallback_reason:
         note = f"<b>Fallback note:</b> {escape(fallback_reason)}"
         story.append(Paragraph(note, styles["small"]))
@@ -656,13 +639,9 @@ def _migration_block(
     ]
 
     confidence = round(float(migration.confidence) * 100)
-    provider_text = (
-        f"{_display(migration.provider)} / "
-        f"{_display(migration.provider_model)}"
-    )
+    provider_text = f"{_display(migration.provider)} / {_display(migration.provider_model)}"
     provider_line = (
-        f"<b>Confidence:</b> {confidence}% &nbsp;&nbsp; "
-        f"<b>Provider:</b> {escape(provider_text)}"
+        f"<b>Confidence:</b> {confidence}% &nbsp;&nbsp; <b>Provider:</b> {escape(provider_text)}"
     )
     story.append(Paragraph(provider_line, styles["small"]))
 
@@ -682,9 +661,7 @@ def _migration_block(
         )
     )
 
-    code_example = _display(
-        getattr(migration, "code_example", "")
-    )
+    code_example = _display(getattr(migration, "code_example", ""))
     if code_example:
         story.append(Paragraph("Example", styles["body"]))
         story.append(
@@ -815,9 +792,7 @@ def _patches_block(
         )
         if checks.warnings or proposal.warnings:
             warning_text = " ".join([*checks.warnings, *proposal.warnings])[:1_000]
-            story.append(
-                Paragraph(f"Warnings: {escape(warning_text)}", styles["small"])
-            )
+            story.append(Paragraph(f"Warnings: {escape(warning_text)}", styles["small"]))
     story.append(
         Paragraph(
             "No repository files were modified. Every patch is a review-only proposal.",
@@ -850,8 +825,7 @@ def _patch_validations_block(
         ]:
             story.append(
                 Paragraph(
-                    f"- {escape(_display(finding.status)).upper()}: "
-                    f"{escape(finding.message)}",
+                    f"- {escape(_display(finding.status)).upper()}: {escape(finding.message)}",
                     styles["bullet"],
                 )
             )
@@ -875,6 +849,40 @@ def _patch_validations_block(
     story.append(
         Paragraph(
             "Static validation only. Repository code and tests were not executed.",
+            styles["body"],
+        )
+    )
+    return story
+
+
+def _pull_requests_block(
+    report: AnalysisReport,
+    styles: dict[str, ParagraphStyle],
+) -> list[Any]:
+    if not report.pull_requests:
+        return []
+    story: list[Any] = [Paragraph("GitHub pull requests", styles["section"])]
+    for record in report.pull_requests[:5]:
+        number = f"#{record.pull_request_number}" if record.pull_request_number else "Pending"
+        url = escape(record.pull_request_url or "Not yet created")
+        commit = escape((record.commit_sha or "pending")[:12])
+        story.append(
+            Paragraph(
+                f"<b>{escape(number)}</b> - {escape(record.repository_owner)}/"
+                f"{escape(record.repository_name)}<br/>"
+                f"Status: {escape(_display(record.status))} | "
+                f"Branch: {escape(record.branch_name)}<br/>"
+                f"Base: {escape(record.base_ref)} @ {escape(record.base_commit_sha[:12])} | "
+                f"Commit: {commit}<br/>"
+                f"Validation: {escape(_display(record.validation_readiness))} | "
+                f"Files: {record.files_changed}<br/>URL: {url}",
+                styles["body"],
+            )
+        )
+    story.append(
+        Paragraph(
+            "Repository tests were not executed. Pull requests were not merged or deployed "
+            "automatically.",
             styles["body"],
         )
     )

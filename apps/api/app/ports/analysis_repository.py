@@ -26,6 +26,7 @@ from apps.api.app.schemas.migration import (
     MigrationRecommendation,
 )
 from apps.api.app.schemas.patch import PatchProposal
+from apps.api.app.schemas.pull_request import GitHubPullRequestRecord
 from apps.api.app.schemas.risk import RiskPrediction
 from apps.api.app.schemas.validation import PatchValidationRun
 
@@ -86,9 +87,7 @@ class AnalysisRepository(ABC):
         impact_summary: ImpactSummary | None,
         impacts: list[ChangeImpact],
         risk_predictions: list[RiskPrediction],
-        migration_recommendations: list[
-            MigrationRecommendation
-        ],
+        migration_recommendations: list[MigrationRecommendation],
         stage_id: int,
         completed_at: datetime,
         duration_ms: int,
@@ -194,10 +193,28 @@ class AnalysisRepository(ABC):
         """Retrieve an idempotent validation by request fingerprint."""
 
     @abstractmethod
-    def list_patch_validations(
-        self, analysis_id: str, patch_id: str
-    ) -> list[PatchValidationRun]:
+    def list_patch_validations(self, analysis_id: str, patch_id: str) -> list[PatchValidationRun]:
         """Retrieve validation history for one patch."""
+
+    @abstractmethod
+    def save_pull_request_record(self, record: GitHubPullRequestRecord) -> GitHubPullRequestRecord:
+        """Persist resumable, credential-free GitHub PR metadata."""
+
+    @abstractmethod
+    def get_pull_request_record(
+        self, analysis_id: str, pr_record_id: str
+    ) -> GitHubPullRequestRecord | None:
+        """Retrieve one local PR workflow record."""
+
+    @abstractmethod
+    def get_pull_request_by_fingerprint(
+        self, analysis_id: str, fingerprint: str
+    ) -> GitHubPullRequestRecord | None:
+        """Retrieve an idempotent PR workflow by fingerprint."""
+
+    @abstractmethod
+    def list_pull_request_records(self, analysis_id: str) -> list[GitHubPullRequestRecord]:
+        """List local GitHub PR metadata for an analysis."""
 
     @abstractmethod
     def delete(

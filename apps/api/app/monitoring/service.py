@@ -11,8 +11,14 @@ from uuid import uuid4
 
 from apps.api.app.core.exceptions import DriftGuardError
 from apps.api.app.domain.analysis import RepositorySourceType
-from apps.api.app.domain.monitor import ApiMonitor, MonitorCheckRecord, MonitorCheckStatus
-from apps.api.app.monitoring.specification_source import OpenApiSpecificationSource
+from apps.api.app.domain.monitor import (
+    ApiMonitor,
+    MonitorCheckRecord,
+    MonitorCheckStatus,
+)
+from apps.api.app.monitoring.specification_source import (
+    OpenApiSpecificationSource,
+)
 from apps.api.app.ports.monitor_repository import ApiMonitorRepository
 from apps.api.app.repository.github_source import (
     GitHubRepositorySource,
@@ -238,6 +244,7 @@ class MonitorCheckService:
                 repository_source_type=RepositorySourceType.GITHUB,
                 repository_url=monitor.repository_url,
                 repository_ref=archive.ref,
+                repository_commit_sha=archive.commit_sha,
             )
             completed_at = self.clock()
             finished_check = replace(
@@ -290,10 +297,7 @@ class MonitorCheckService:
 
 def monitor_response(monitor: ApiMonitor) -> MonitorResponse:
     return MonitorResponse(
-        **{
-            field: getattr(monitor, field)
-            for field in MonitorResponse.model_fields
-        }
+        **{field: getattr(monitor, field) for field in MonitorResponse.model_fields}
     )
 
 

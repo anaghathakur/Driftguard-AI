@@ -109,4 +109,5 @@ async def analyze_github_impact(
         repository_source_type=RepositorySourceType.GITHUB,
         repository_url=repository_url,
         repository_ref=archive.ref,
+        repository_commit_sha=archive.commit_sha,
     )

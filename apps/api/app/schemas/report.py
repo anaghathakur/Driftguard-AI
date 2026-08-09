@@ -14,6 +14,7 @@ from apps.api.app.schemas.analysis import (
 from apps.api.app.schemas.comparison import ApiChange
 from apps.api.app.schemas.migration import MigrationRecommendation
 from apps.api.app.schemas.patch import PatchProposal
+from apps.api.app.schemas.pull_request import GitHubPullRequestRecord
 from apps.api.app.schemas.risk import RiskPrediction
 from apps.api.app.schemas.validation import PatchValidationRun
 
@@ -34,6 +35,7 @@ class AnalysisReportSummary(BaseModel):
     migration_recommendations: int
     patch_proposals: int = 0
     patch_validations: int = 0
+    pull_requests: int = 0
 
 
 class AnalysisReport(BaseModel):
@@ -49,4 +51,5 @@ class AnalysisReport(BaseModel):
     migrations: list[MigrationRecommendation]
     patches: list[PatchProposal] = Field(default_factory=list)
     patch_validations: list[PatchValidationRun] = Field(default_factory=list)
+    pull_requests: list[GitHubPullRequestRecord] = Field(default_factory=list)
     pipeline: list[PipelineStageResponse]

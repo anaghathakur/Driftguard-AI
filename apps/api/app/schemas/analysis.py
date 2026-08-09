@@ -33,6 +33,11 @@ class RepositorySourceInfo(BaseModel):
     source_type: RepositorySourceType
     repository_url: str | None = None
     repository_ref: str | None = None
+    repository_commit_sha: str | None = Field(
+        default=None,
+        pattern=r"^[a-f0-9]{40}$",
+        exclude_if=lambda value: value is None,
+    )
 
 
 class AnalysisFailureResponse(BaseModel):

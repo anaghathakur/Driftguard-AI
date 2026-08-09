@@ -26,9 +26,14 @@ from apps.api.app.domain.analysis import (
 )
 from apps.api.app.ports.analysis_repository import AnalysisRepository
 from apps.api.app.schemas.comparison import ApiChange, ComparisonResponse
-from apps.api.app.schemas.impact import ChangeImpact, ImpactSummary, RepositoryScanSummary
+from apps.api.app.schemas.impact import (
+    ChangeImpact,
+    ImpactSummary,
+    RepositoryScanSummary,
+)
 from apps.api.app.schemas.migration import MigrationRecommendation
 from apps.api.app.schemas.patch import PatchProposal
+from apps.api.app.schemas.pull_request import GitHubPullRequestRecord
 from apps.api.app.schemas.risk import RiskPrediction
 from apps.api.app.schemas.validation import PatchValidationRun
 
@@ -51,6 +56,9 @@ CREATE TABLE IF NOT EXISTS analyses (
     ),
     repository_url TEXT,
     repository_ref TEXT,
+    repository_commit_sha TEXT CHECK (
+        repository_commit_sha IS NULL OR length(repository_commit_sha) = 40
+    ),
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     completed_at TEXT,
@@ -244,6 +252,21 @@ CREATE TABLE IF NOT EXISTS patch_validation_runs (
     FOREIGN KEY (analysis_id) REFERENCES analyses(analysis_id) ON DELETE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS github_pull_request_records (
+    pr_record_id TEXT PRIMARY KEY,
+    analysis_id TEXT NOT NULL,
+    patch_id TEXT NOT NULL,
+    validation_id TEXT NOT NULL,
+    request_fingerprint TEXT NOT NULL UNIQUE CHECK (length(request_fingerprint) = 64),
+    status TEXT NOT NULL CHECK (status IN ('preparing', 'created', 'failed')),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    record_json TEXT NOT NULL,
+    FOREIGN KEY (analysis_id) REFERENCES analyses(analysis_id) ON DELETE CASCADE,
+    FOREIGN KEY (patch_id) REFERENCES patch_proposals(patch_id) ON DELETE CASCADE,
+    FOREIGN KEY (validation_id) REFERENCES patch_validation_runs(validation_id) ON DELETE CASCADE
+);
+
 CREATE INDEX IF NOT EXISTS idx_analyses_created_at ON analyses(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_changes_analysis ON analysis_changes(analysis_id, ordinal);
 CREATE INDEX IF NOT EXISTS idx_matches_analysis ON repository_matches(analysis_id, match_id);
@@ -256,6 +279,8 @@ CREATE INDEX IF NOT EXISTS idx_patches_analysis
     ON patch_proposals(analysis_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_patch_validations_patch
     ON patch_validation_runs(analysis_id, patch_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_pull_requests_analysis
+    ON github_pull_request_records(analysis_id, created_at DESC);
 """
 
 
@@ -288,8 +313,9 @@ class SQLiteAnalysisRepository(AnalysisRepository):
                     old_filename, new_filename, repository_filename,
                     old_file_sha256, new_file_sha256, repository_file_sha256,
                     repository_source_type, repository_url, repository_ref,
+                    repository_commit_sha,
                     created_at, updated_at
-                ) VALUES (?, ?, 'running', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, 'running', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     analysis_id,
@@ -308,6 +334,7 @@ class SQLiteAnalysisRepository(AnalysisRepository):
                     ),
                     submission.repository_url,
                     submission.repository_ref,
+                    submission.repository_commit_sha,
                     timestamp,
                     timestamp,
                 ),
@@ -318,7 +345,11 @@ class SQLiteAnalysisRepository(AnalysisRepository):
             return AnalysisCreation(analysis=_analysis_record(created), duplicate=False)
 
     def start_stage(
-        self, analysis_id: str, stage_name: str, ordinal: int, started_at: datetime
+        self,
+        analysis_id: str,
+        stage_name: str,
+        ordinal: int,
+        started_at: datetime,
     ) -> int:
         with self._transaction() as connection:
             cursor = connection.execute(
@@ -335,9 +366,7 @@ class SQLiteAnalysisRepository(AnalysisRepository):
             )
             return int(cursor.lastrowid)
 
-    def complete_stage(
-        self, stage_id: int, completed_at: datetime, duration_ms: int
-    ) -> None:
+    def complete_stage(self, stage_id: int, completed_at: datetime, duration_ms: int) -> None:
         with self._transaction() as connection:
             connection.execute(
                 """
@@ -388,7 +417,14 @@ class SQLiteAnalysisRepository(AnalysisRepository):
                     status_code, created_at
                 ) VALUES (?, ?, ?, ?, ?, ?)
                 """,
-                (analysis_id, stage_name, safe_code, safe_text, status_code, timestamp),
+                (
+                    analysis_id,
+                    stage_name,
+                    safe_code,
+                    safe_text,
+                    status_code,
+                    timestamp,
+                ),
             )
 
     def save_success(
@@ -684,9 +720,7 @@ class SQLiteAnalysisRepository(AnalysisRepository):
                     "model_version": row["model_version"],
                     "baseline_level": row["baseline_level"],
                     "baseline_score": row["baseline_score"],
-                    "class_probabilities": _load_json(
-                        row["class_probabilities_json"]
-                    ),
+                    "class_probabilities": _load_json(row["class_probabilities_json"]),
                     "features": _load_json(row["features_json"]),
                     "reasons": _load_json(row["reasons_json"]),
                     "top_drivers": _load_json(row["top_drivers_json"]),
@@ -725,22 +759,12 @@ class SQLiteAnalysisRepository(AnalysisRepository):
                     "schema_version": row["schema_version"],
                     "summary": row["summary"],
                     "why_it_matters": row["why_it_matters"],
-                    "affected_code_explanation": row[
-                        "affected_code_explanation"
-                    ],
-                    "migration_steps": _load_json(
-                        row["migration_steps_json"]
-                    ),
-                    "suggested_tests": _load_json(
-                        row["suggested_tests_json"]
-                    ),
+                    "affected_code_explanation": row["affected_code_explanation"],
+                    "migration_steps": _load_json(row["migration_steps_json"]),
+                    "suggested_tests": _load_json(row["suggested_tests_json"]),
                     "code_example": row["code_example"],
-                    "assumptions": _load_json(
-                        row["assumptions_json"]
-                    ),
-                    "warnings": _load_json(
-                        row["warnings_json"]
-                    ),
+                    "assumptions": _load_json(row["assumptions_json"]),
+                    "warnings": _load_json(row["warnings_json"]),
                     "confidence": row["confidence"],
                     "provider_warning": row["provider_warning"],
                     "redactions_applied": row["redactions_applied"],
@@ -909,9 +933,7 @@ class SQLiteAnalysisRepository(AnalysisRepository):
             ).fetchone()
         return _patch_validation(row) if row is not None else None
 
-    def list_patch_validations(
-        self, analysis_id: str, patch_id: str
-    ) -> list[PatchValidationRun]:
+    def list_patch_validations(self, analysis_id: str, patch_id: str) -> list[PatchValidationRun]:
         with self._connect() as connection:
             rows = connection.execute(
                 """
@@ -922,6 +944,70 @@ class SQLiteAnalysisRepository(AnalysisRepository):
                 (analysis_id, patch_id),
             ).fetchall()
         return [_patch_validation(row) for row in rows]
+
+    def save_pull_request_record(self, record: GitHubPullRequestRecord) -> GitHubPullRequestRecord:
+        with self._transaction() as connection:
+            connection.execute(
+                """
+                INSERT INTO github_pull_request_records (
+                    pr_record_id, analysis_id, patch_id, validation_id,
+                    request_fingerprint, status, created_at, updated_at, record_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(pr_record_id) DO UPDATE SET
+                    status = excluded.status,
+                    updated_at = excluded.updated_at,
+                    record_json = excluded.record_json
+                """,
+                (
+                    record.pr_record_id,
+                    record.analysis_id,
+                    record.patch_id,
+                    record.validation_id,
+                    record.request_fingerprint,
+                    record.status.value,
+                    _timestamp(record.created_at),
+                    _timestamp(record.updated_at),
+                    _json(record.model_dump(mode="json")),
+                ),
+            )
+        return record
+
+    def get_pull_request_record(
+        self, analysis_id: str, pr_record_id: str
+    ) -> GitHubPullRequestRecord | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT * FROM github_pull_request_records
+                WHERE analysis_id = ? AND pr_record_id = ?
+                """,
+                (analysis_id, pr_record_id),
+            ).fetchone()
+        return _pull_request_record(row) if row is not None else None
+
+    def get_pull_request_by_fingerprint(
+        self, analysis_id: str, fingerprint: str
+    ) -> GitHubPullRequestRecord | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT * FROM github_pull_request_records
+                WHERE analysis_id = ? AND request_fingerprint = ?
+                """,
+                (analysis_id, fingerprint),
+            ).fetchone()
+        return _pull_request_record(row) if row is not None else None
+
+    def list_pull_request_records(self, analysis_id: str) -> list[GitHubPullRequestRecord]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT * FROM github_pull_request_records
+                WHERE analysis_id = ? ORDER BY created_at DESC, pr_record_id
+                """,
+                (analysis_id,),
+            ).fetchall()
+        return [_pull_request_record(row) for row in rows]
 
     def delete(self, analysis_id: str) -> bool:
         with self._transaction() as connection:
@@ -981,6 +1067,7 @@ def _analysis_record(row: sqlite3.Row) -> AnalysisRecord:
         ),
         repository_url=row["repository_url"],
         repository_ref=row["repository_ref"],
+        repository_commit_sha=row["repository_commit_sha"],
     )
 
 
@@ -1011,6 +1098,10 @@ def _patch_proposal(row: sqlite3.Row) -> PatchProposal:
 
 def _patch_validation(row: sqlite3.Row) -> PatchValidationRun:
     return PatchValidationRun.model_validate(_load_json(row["validation_json"]))
+
+
+def _pull_request_record(row: sqlite3.Row) -> GitHubPullRequestRecord:
+    return GitHubPullRequestRecord.model_validate(_load_json(row["record_json"]))
 
 
 def _stage_record(row: sqlite3.Row) -> PipelineStageRecord:
@@ -1054,21 +1145,18 @@ def _safe_trace_json(trace: list[Any]) -> str:
     safe: list[dict[str, Any]] = []
     for step in trace[:10]:
         data = step.model_dump(mode="json")
-        data["evidence"] = redact_secrets(str(data.get("evidence", ""))[:240])[0][
-            :240
-        ]
+        data["evidence"] = redact_secrets(str(data.get("evidence", ""))[:240])[0][:240]
         safe.append(data)
     return _json(safe)
 
 
 def _ensure_analysis_source_columns(connection: sqlite3.Connection) -> None:
-    columns = {
-        row[1] for row in connection.execute("PRAGMA table_info(analyses)").fetchall()
-    }
+    columns = {row[1] for row in connection.execute("PRAGMA table_info(analyses)").fetchall()}
     additions = {
         "repository_source_type": "TEXT",
         "repository_url": "TEXT",
         "repository_ref": "TEXT",
+        "repository_commit_sha": "TEXT",
     }
     for name, definition in additions.items():
         if name not in columns:
@@ -1077,8 +1165,7 @@ def _ensure_analysis_source_columns(connection: sqlite3.Connection) -> None:
 
 def _ensure_repository_match_columns(connection: sqlite3.Connection) -> None:
     columns = {
-        row[1]
-        for row in connection.execute("PRAGMA table_info(repository_matches)").fetchall()
+        row[1] for row in connection.execute("PRAGMA table_info(repository_matches)").fetchall()
     }
     additions = {
         "symbol": "TEXT",
@@ -1089,6 +1176,4 @@ def _ensure_repository_match_columns(connection: sqlite3.Connection) -> None:
     }
     for name, definition in additions.items():
         if name not in columns:
-            connection.execute(
-                f"ALTER TABLE repository_matches ADD COLUMN {name} {definition}"
-            )
+            connection.execute(f"ALTER TABLE repository_matches ADD COLUMN {name} {definition}")

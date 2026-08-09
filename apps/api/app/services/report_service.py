@@ -24,28 +24,21 @@ def build_analysis_report(
     migrations = service.get_migration_recommendations(analysis_id)
     patches = service.get_patch_proposals(analysis_id)
     validations = service.get_patch_validations(analysis_id)
+    pull_requests = service.get_pull_request_records(analysis_id)
     pipeline = service.get_pipeline(analysis_id)
 
     comparison_summary = analysis.comparison_summary
-    impacted_files = len(
-        {match.file_path for match in matches}
-    )
+    impacted_files = len({match.file_path for match in matches})
 
     return AnalysisReport(
-        report_version="1.3",
+        report_version="1.4",
         generated_at=datetime.now(UTC),
         analysis=analysis,
         summary=AnalysisReportSummary(
             total_changes=comparison_summary.total_changes,
-            breaking_changes=(
-                comparison_summary.breaking_changes
-            ),
-            potentially_breaking_changes=(
-                comparison_summary.potentially_breaking_changes
-            ),
-            non_breaking_changes=(
-                comparison_summary.non_breaking_changes
-            ),
+            breaking_changes=(comparison_summary.breaking_changes),
+            potentially_breaking_changes=(comparison_summary.potentially_breaking_changes),
+            non_breaking_changes=(comparison_summary.non_breaking_changes),
             repository_matches=len(matches),
             impacted_files=impacted_files,
             direct_matches=sum(match.impact_depth == 0 for match in matches),
@@ -58,6 +51,7 @@ def build_analysis_report(
             migration_recommendations=len(migrations),
             patch_proposals=len(patches),
             patch_validations=len(validations),
+            pull_requests=len(pull_requests),
         ),
         changes=changes,
         matches=matches,
@@ -65,5 +59,6 @@ def build_analysis_report(
         migrations=migrations,
         patches=patches,
         patch_validations=validations,
+        pull_requests=pull_requests,
         pipeline=pipeline,
     )

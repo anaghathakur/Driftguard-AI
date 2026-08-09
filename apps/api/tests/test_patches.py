@@ -184,7 +184,7 @@ def test_python_patch_api_snapshot_idempotency_persistence_reports_and_delete(
 
     report = client.get(f"/api/v1/analyses/{analysis_id}/report")
     assert report.status_code == 200
-    assert report.json()["report_version"] == "1.3"
+    assert report.json()["report_version"] == "1.4"
     assert report.json()["summary"]["patch_proposals"] == 1
     assert report.json()["patches"][0]["patch_id"] == proposal["patch_id"]
     pdf = client.get(f"/api/v1/analyses/{analysis_id}/report.pdf")

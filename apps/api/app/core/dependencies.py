@@ -30,8 +30,13 @@ from apps.api.app.migration.service import (
     MigrationRecommendationService,
 )
 from apps.api.app.monitoring.scheduler import MonitorScheduler
-from apps.api.app.monitoring.service import ApiMonitorService, MonitorCheckService
-from apps.api.app.monitoring.specification_source import OpenApiSpecificationSource
+from apps.api.app.monitoring.service import (
+    ApiMonitorService,
+    MonitorCheckService,
+)
+from apps.api.app.monitoring.specification_source import (
+    OpenApiSpecificationSource,
+)
 from apps.api.app.patches.provider import (
     GeminiPatchGenerationProvider,
     MockPatchGenerationProvider,
@@ -42,6 +47,12 @@ from apps.api.app.ports.analysis_repository import (
     AnalysisRepository,
 )
 from apps.api.app.ports.monitor_repository import ApiMonitorRepository
+from apps.api.app.pull_requests.provider import (
+    GitHubAppWriteProvider,
+    GitHubWriteProvider,
+    MockGitHubWriteProvider,
+)
+from apps.api.app.pull_requests.service import PullRequestWorkflowService
 from apps.api.app.repository.github_source import (
     GitHubRepositorySource,
 )
@@ -60,9 +71,7 @@ from apps.api.app.validation.service import PatchValidationService
 @lru_cache
 def get_default_analysis_repository() -> AnalysisRepository:
     if settings.storage_backend == "sqlite":
-        repository: AnalysisRepository = SQLiteAnalysisRepository(
-            settings.database_path
-        )
+        repository: AnalysisRepository = SQLiteAnalysisRepository(settings.database_path)
         repository.initialize()
         return repository
 
@@ -74,10 +83,7 @@ def get_default_analysis_repository() -> AnalysisRepository:
         repository.initialize()
         return repository
 
-    raise RuntimeError(
-        "DRIFTGUARD_STORAGE_BACKEND must be either "
-        "'sqlite' or 'firestore'"
-    )
+    raise RuntimeError("DRIFTGUARD_STORAGE_BACKEND must be either 'sqlite' or 'firestore'")
 
 
 def get_analysis_repository() -> AnalysisRepository:
@@ -87,9 +93,7 @@ def get_analysis_repository() -> AnalysisRepository:
 @lru_cache
 def get_default_monitor_repository() -> ApiMonitorRepository:
     if settings.storage_backend == "sqlite":
-        repository: ApiMonitorRepository = SQLiteMonitorRepository(
-            settings.database_path
-        )
+        repository: ApiMonitorRepository = SQLiteMonitorRepository(settings.database_path)
         repository.initialize()
         return repository
     if settings.storage_backend == "firestore":
@@ -99,10 +103,7 @@ def get_default_monitor_repository() -> ApiMonitorRepository:
         )
         repository.initialize()
         return repository
-    raise RuntimeError(
-        "DRIFTGUARD_STORAGE_BACKEND must be either "
-        "'sqlite' or 'firestore'"
-    )
+    raise RuntimeError("DRIFTGUARD_STORAGE_BACKEND must be either 'sqlite' or 'firestore'")
 
 
 def get_monitor_repository() -> ApiMonitorRepository:
@@ -130,16 +131,11 @@ def get_migration_provider() -> MigrationRecommendationProvider:
     if settings.ai_provider == "mock":
         return MockMigrationRecommendationProvider()
 
-    raise RuntimeError(
-        "DRIFTGUARD_AI_PROVIDER must be either "
-        "'mock' or 'gemini'"
-    )
+    raise RuntimeError("DRIFTGUARD_AI_PROVIDER must be either 'mock' or 'gemini'")
 
 
 @lru_cache
-def get_migration_recommendation_service() -> (
-    MigrationRecommendationService
-):
+def get_migration_recommendation_service() -> MigrationRecommendationService:
     return MigrationRecommendationService(
         get_migration_provider(),
         prompt_version=settings.ai_prompt_version,
@@ -158,9 +154,7 @@ def get_analysis_pipeline_service(
     ],
     migration_service: Annotated[
         MigrationRecommendationService,
-        Depends(
-            get_migration_recommendation_service
-        ),
+        Depends(get_migration_recommendation_service),
     ],
 ) -> AnalysisPipelineService:
     return AnalysisPipelineService(
@@ -216,11 +210,30 @@ def get_test_plan_provider() -> TestPlanProvider:
 def get_patch_validation_service(
     repository: Annotated[AnalysisRepository, Depends(get_analysis_repository)],
     provider: Annotated[TestPlanProvider, Depends(get_test_plan_provider)],
-    github_source: Annotated[
-        GitHubRepositorySource, Depends(get_github_repository_source)
-    ],
+    github_source: Annotated[GitHubRepositorySource, Depends(get_github_repository_source)],
 ) -> PatchValidationService:
     return PatchValidationService(repository, provider, github_source)
+
+
+@lru_cache
+def get_github_write_provider() -> GitHubWriteProvider:
+    if settings.github_write_provider == "mock":
+        return MockGitHubWriteProvider()
+    if settings.github_write_provider == "github_app":
+        return GitHubAppWriteProvider(
+            app_id=settings.github_app_id,
+            private_key_path=settings.github_app_private_key_path,
+            timeout_seconds=settings.github_timeout_seconds,
+        )
+    raise RuntimeError("DRIFTGUARD_GITHUB_WRITE_PROVIDER must be either 'mock' or 'github_app'")
+
+
+def get_pull_request_workflow_service(
+    repository: Annotated[AnalysisRepository, Depends(get_analysis_repository)],
+    provider: Annotated[GitHubWriteProvider, Depends(get_github_write_provider)],
+    github_source: Annotated[GitHubRepositorySource, Depends(get_github_repository_source)],
+) -> PullRequestWorkflowService:
+    return PullRequestWorkflowService(repository, provider, github_source)
 
 
 def get_openapi_specification_source() -> OpenApiSpecificationSource:

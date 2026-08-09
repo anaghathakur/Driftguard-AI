@@ -305,6 +305,62 @@ export type PatchValidationListItem = Pick<
   | "provider_model"
 >;
 
+export type PullRequestPreview = {
+  repository_owner: string;
+  repository_name: string;
+  base_ref: string;
+  base_commit_sha: string;
+  branch_name: string;
+  files_changed: number;
+  edit_count: number;
+  validation_readiness: "ready_for_review";
+  tests_executed: false;
+};
+
+export type GitHubPullRequestRecord = {
+  pr_record_id: string;
+  analysis_id: string;
+  patch_id: string;
+  validation_id: string;
+  repository_owner: string;
+  repository_name: string;
+  base_ref: string;
+  base_commit_sha: string;
+  branch_name: string;
+  commit_sha: string | null;
+  pull_request_number: number | null;
+  pull_request_url: string | null;
+  status: "preparing" | "created" | "failed";
+  created_at: string;
+  updated_at: string;
+  provider: "mock" | "github_app";
+  request_fingerprint: string;
+  pull_request_profile_version: string;
+  validation_readiness: "ready_for_review";
+  files_changed: number;
+  edit_count: number;
+  modified_file_sha256: Record<string, string>;
+  failure_code: string | null;
+  failure_message: string | null;
+  tests_executed: false;
+};
+
+export type PullRequestListItem = Pick<
+  GitHubPullRequestRecord,
+  | "pr_record_id"
+  | "analysis_id"
+  | "patch_id"
+  | "validation_id"
+  | "repository_owner"
+  | "repository_name"
+  | "branch_name"
+  | "pull_request_number"
+  | "pull_request_url"
+  | "status"
+  | "created_at"
+  | "validation_readiness"
+>;
+
 export type AnalysisReportSummary = {
   total_changes: number;
   breaking_changes: number;
@@ -319,6 +375,7 @@ export type AnalysisReportSummary = {
   migration_recommendations: number;
   patch_proposals: number;
   patch_validations: number;
+  pull_requests: number;
 };
 
 export type AnalysisReport = {
@@ -332,6 +389,7 @@ export type AnalysisReport = {
   migrations: MigrationRecommendation[];
   patches: PatchProposal[];
   patch_validations: PatchValidationRun[];
+  pull_requests: GitHubPullRequestRecord[];
   pipeline: Array<Record<string, unknown>>;
 };
 
@@ -576,6 +634,44 @@ export async function getPatchValidation(
 ): Promise<PatchValidationRun> {
   return requestJson<PatchValidationRun>(
     `/api/v1/analyses/${analysisId}/patches/${patchId}/validations/${validationId}`,
+  );
+}
+
+export async function previewPullRequest(
+  analysisId: string,
+  patchId: string,
+  validationId: string,
+): Promise<PullRequestPreview> {
+  return requestJson<PullRequestPreview>(
+    `/api/v1/analyses/${analysisId}/patches/${patchId}/validations/${validationId}/pull-request/preview`,
+  );
+}
+
+export async function createPullRequest(
+  analysisId: string,
+  patchId: string,
+  validationId: string,
+): Promise<GitHubPullRequestRecord> {
+  return requestJson<GitHubPullRequestRecord>(
+    `/api/v1/analyses/${analysisId}/patches/${patchId}/validations/${validationId}/pull-request`,
+    { method: "POST" },
+  );
+}
+
+export async function getPullRequests(
+  analysisId: string,
+): Promise<PullRequestListItem[]> {
+  return requestJson<PullRequestListItem[]>(
+    `/api/v1/analyses/${analysisId}/pull-requests`,
+  );
+}
+
+export async function getPullRequest(
+  analysisId: string,
+  pullRequestRecordId: string,
+): Promise<GitHubPullRequestRecord> {
+  return requestJson<GitHubPullRequestRecord>(
+    `/api/v1/analyses/${analysisId}/pull-requests/${pullRequestRecordId}`,
   );
 }
 

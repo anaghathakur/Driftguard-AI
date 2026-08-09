@@ -18,14 +18,10 @@ def _positive_int(
     try:
         value = int(raw_value)
     except ValueError as exc:
-        raise RuntimeError(
-            f"{name} must be an integer"
-        ) from exc
+        raise RuntimeError(f"{name} must be an integer") from exc
 
     if value <= 0:
-        raise RuntimeError(
-            f"{name} must be greater than zero"
-        )
+        raise RuntimeError(f"{name} must be greater than zero")
 
     return value
 
@@ -42,14 +38,10 @@ def _non_negative_int(
     try:
         value = int(raw_value)
     except ValueError as exc:
-        raise RuntimeError(
-            f"{name} must be an integer"
-        ) from exc
+        raise RuntimeError(f"{name} must be an integer") from exc
 
     if value < 0:
-        raise RuntimeError(
-            f"{name} must be zero or greater"
-        )
+        raise RuntimeError(f"{name} must be zero or greater")
 
     return value
 
@@ -66,14 +58,10 @@ def _positive_float(
     try:
         value = float(raw_value)
     except ValueError as exc:
-        raise RuntimeError(
-            f"{name} must be a number"
-        ) from exc
+        raise RuntimeError(f"{name} must be a number") from exc
 
     if value <= 0:
-        raise RuntimeError(
-            f"{name} must be greater than zero"
-        )
+        raise RuntimeError(f"{name} must be greater than zero")
 
     return value
 
@@ -95,10 +83,14 @@ class Settings:
     app_name: str = "DriftGuard AI"
     api_prefix: str = "/api/v1"
 
-    storage_backend: str = os.getenv(
-        "DRIFTGUARD_STORAGE_BACKEND",
-        "sqlite",
-    ).strip().lower()
+    storage_backend: str = (
+        os.getenv(
+            "DRIFTGUARD_STORAGE_BACKEND",
+            "sqlite",
+        )
+        .strip()
+        .lower()
+    )
 
     firestore_project_id: str = os.getenv(
         "DRIFTGUARD_FIRESTORE_PROJECT_ID",
@@ -125,10 +117,14 @@ class Settings:
         "apps/api/models/risk/v1.0.0/metadata.json",
     )
 
-    ai_provider: str = os.getenv(
-        "DRIFTGUARD_AI_PROVIDER",
-        "mock",
-    ).strip().lower()
+    ai_provider: str = (
+        os.getenv(
+            "DRIFTGUARD_AI_PROVIDER",
+            "mock",
+        )
+        .strip()
+        .lower()
+    )
 
     gemini_api_key: str = os.getenv(
         "DRIFTGUARD_GEMINI_API_KEY",
@@ -255,10 +251,14 @@ class Settings:
         100_000,
     )
 
-    test_plan_provider: str = os.getenv(
-        "DRIFTGUARD_TEST_PLAN_PROVIDER",
-        "mock",
-    ).strip().lower()
+    test_plan_provider: str = (
+        os.getenv(
+            "DRIFTGUARD_TEST_PLAN_PROVIDER",
+            "mock",
+        )
+        .strip()
+        .lower()
+    )
 
     max_validation_findings: int = _positive_int(
         "DRIFTGUARD_MAX_VALIDATION_FINDINGS",
@@ -278,6 +278,35 @@ class Settings:
     max_test_context_bytes: int = _positive_int(
         "DRIFTGUARD_MAX_TEST_CONTEXT_BYTES",
         40_000,
+    )
+
+    github_write_provider: str = (
+        os.getenv(
+            "DRIFTGUARD_GITHUB_WRITE_PROVIDER",
+            "mock",
+        )
+        .strip()
+        .lower()
+    )
+
+    github_app_id: str = os.getenv(
+        "DRIFTGUARD_GITHUB_APP_ID",
+        "",
+    ).strip()
+
+    github_app_private_key_path: str = os.getenv(
+        "DRIFTGUARD_GITHUB_APP_PRIVATE_KEY_PATH",
+        "",
+    ).strip()
+
+    max_pull_request_body_bytes: int = _positive_int(
+        "DRIFTGUARD_MAX_PULL_REQUEST_BODY_BYTES",
+        20_000,
+    )
+
+    max_pull_request_modified_bytes: int = _positive_int(
+        "DRIFTGUARD_MAX_PULL_REQUEST_MODIFIED_BYTES",
+        1024 * 1024,
     )
 
 

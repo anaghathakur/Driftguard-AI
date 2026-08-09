@@ -23,6 +23,7 @@ from apps.api.app.api.routes.monitors import (
 from apps.api.app.api.routes.patches import (
     router as patches_router,
 )
+from apps.api.app.api.routes.pull_requests import router as pull_requests_router
 from apps.api.app.api.routes.risk import (
     router as risk_router,
 )
@@ -108,6 +109,10 @@ def create_app() -> FastAPI:
     )
     app.include_router(
         validations_router,
+        prefix=settings.api_prefix,
+    )
+    app.include_router(
+        pull_requests_router,
         prefix=settings.api_prefix,
     )
 

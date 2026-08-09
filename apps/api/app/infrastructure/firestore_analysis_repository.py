@@ -24,9 +24,14 @@ from apps.api.app.domain.analysis import (
 )
 from apps.api.app.ports.analysis_repository import AnalysisRepository
 from apps.api.app.schemas.comparison import ApiChange, ComparisonResponse
-from apps.api.app.schemas.impact import ChangeImpact, ImpactSummary, RepositoryScanSummary
+from apps.api.app.schemas.impact import (
+    ChangeImpact,
+    ImpactSummary,
+    RepositoryScanSummary,
+)
 from apps.api.app.schemas.migration import MigrationRecommendation
 from apps.api.app.schemas.patch import PatchProposal
+from apps.api.app.schemas.pull_request import GitHubPullRequestRecord
 from apps.api.app.schemas.risk import RiskPrediction
 from apps.api.app.schemas.validation import PatchValidationRun
 
@@ -42,6 +47,7 @@ _PIPELINE = "pipeline"
 _FAILURES = "failures"
 _PATCHES = "patches"
 _VALIDATIONS = "validations"
+_PULL_REQUESTS = "pull_requests"
 
 _MAX_BATCH_WRITES = 400
 _STAGE_ID_ATTEMPTS = 5
@@ -73,9 +79,7 @@ class FirestoreAnalysisRepository(AnalysisRepository):
 
         @firestore.transactional
         def create_in_transaction(transaction: Any) -> AnalysisCreation:
-            fingerprint_ref = self._fingerprints.document(
-                submission.request_fingerprint
-            )
+            fingerprint_ref = self._fingerprints.document(submission.request_fingerprint)
             fingerprint_snapshot = fingerprint_ref.get(transaction=transaction)
 
             if fingerprint_snapshot.exists:
@@ -110,6 +114,7 @@ class FirestoreAnalysisRepository(AnalysisRepository):
                 ),
                 "repository_url": submission.repository_url,
                 "repository_ref": submission.repository_ref,
+                "repository_commit_sha": submission.repository_commit_sha,
                 "created_at": submission.created_at,
                 "updated_at": submission.created_at,
                 "completed_at": None,
@@ -303,12 +308,8 @@ class FirestoreAnalysisRepository(AnalysisRepository):
                 )
 
         for prediction in risk_predictions:
-            prediction_ref = analysis_ref.collection(_RISKS).document(
-                prediction.change_id
-            )
-            writes.append(
-                (prediction_ref, prediction.model_dump(mode="json"))
-            )
+            prediction_ref = analysis_ref.collection(_RISKS).document(prediction.change_id)
+            writes.append((prediction_ref, prediction.model_dump(mode="json")))
 
         for recommendation in migration_recommendations:
             recommendation_ref = analysis_ref.collection(_MIGRATIONS).document(
@@ -358,15 +359,9 @@ class FirestoreAnalysisRepository(AnalysisRepository):
         self,
         analysis_id: str,
     ) -> list[ApiChange]:
-        query = (
-            self._analyses.document(analysis_id)
-            .collection(_CHANGES)
-            .order_by("ordinal")
-        )
+        query = self._analyses.document(analysis_id).collection(_CHANGES).order_by("ordinal")
         return [
-            ApiChange.model_validate(
-                _without(snapshot.to_dict() or {}, "ordinal")
-            )
+            ApiChange.model_validate(_without(snapshot.to_dict() or {}, "ordinal"))
             for snapshot in query.stream()
         ]
 
@@ -374,11 +369,7 @@ class FirestoreAnalysisRepository(AnalysisRepository):
         self,
         analysis_id: str,
     ) -> list[StoredMatch]:
-        query = (
-            self._analyses.document(analysis_id)
-            .collection(_MATCHES)
-            .order_by("match_ordinal")
-        )
+        query = self._analyses.document(analysis_id).collection(_MATCHES).order_by("match_ordinal")
 
         matches: list[StoredMatch] = []
         for snapshot in query.stream():
@@ -405,25 +396,16 @@ class FirestoreAnalysisRepository(AnalysisRepository):
         self,
         analysis_id: str,
     ) -> list[PipelineStageRecord]:
-        query = (
-            self._analyses.document(analysis_id)
-            .collection(_PIPELINE)
-            .order_by("ordinal")
-        )
+        query = self._analyses.document(analysis_id).collection(_PIPELINE).order_by("ordinal")
         return [_stage_record(snapshot) for snapshot in query.stream()]
 
     def get_risk_predictions(
         self,
         analysis_id: str,
     ) -> list[RiskPrediction]:
-        query = (
-            self._analyses.document(analysis_id)
-            .collection(_RISKS)
-            .order_by("predicted_at")
-        )
+        query = self._analyses.document(analysis_id).collection(_RISKS).order_by("predicted_at")
         return [
-            RiskPrediction.model_validate(snapshot.to_dict() or {})
-            for snapshot in query.stream()
+            RiskPrediction.model_validate(snapshot.to_dict() or {}) for snapshot in query.stream()
         ]
 
     def get_migration_recommendations(
@@ -431,9 +413,7 @@ class FirestoreAnalysisRepository(AnalysisRepository):
         analysis_id: str,
     ) -> list[MigrationRecommendation]:
         query = (
-            self._analyses.document(analysis_id)
-            .collection(_MIGRATIONS)
-            .order_by("generated_at")
+            self._analyses.document(analysis_id).collection(_MIGRATIONS).order_by("generated_at")
         )
         return [
             MigrationRecommendation.model_validate(snapshot.to_dict() or {})
@@ -485,10 +465,7 @@ class FirestoreAnalysisRepository(AnalysisRepository):
         patch_id: str,
     ) -> PatchProposal | None:
         snapshot = (
-            self._analyses.document(analysis_id)
-            .collection(_PATCHES)
-            .document(patch_id)
-            .get()
+            self._analyses.document(analysis_id).collection(_PATCHES).document(patch_id).get()
         )
         if not snapshot.exists:
             return None
@@ -513,8 +490,7 @@ class FirestoreAnalysisRepository(AnalysisRepository):
             .order_by("created_at", direction=firestore.Query.DESCENDING)
         )
         return [
-            PatchProposal.model_validate(snapshot.to_dict() or {})
-            for snapshot in query.stream()
+            PatchProposal.model_validate(snapshot.to_dict() or {}) for snapshot in query.stream()
         ]
 
     def _validation_collection(self, analysis_id: str, patch_id: str):
@@ -541,9 +517,7 @@ class FirestoreAnalysisRepository(AnalysisRepository):
     def get_patch_validation(
         self, analysis_id: str, patch_id: str, validation_id: str
     ) -> PatchValidationRun | None:
-        snapshot = self._validation_collection(analysis_id, patch_id).document(
-            validation_id
-        ).get()
+        snapshot = self._validation_collection(analysis_id, patch_id).document(validation_id).get()
         if not snapshot.exists:
             return None
         return PatchValidationRun.model_validate(snapshot.to_dict() or {})
@@ -557,14 +531,52 @@ class FirestoreAnalysisRepository(AnalysisRepository):
                 return PatchValidationRun.model_validate(data)
         return None
 
-    def list_patch_validations(
-        self, analysis_id: str, patch_id: str
-    ) -> list[PatchValidationRun]:
+    def list_patch_validations(self, analysis_id: str, patch_id: str) -> list[PatchValidationRun]:
         query = self._validation_collection(analysis_id, patch_id).order_by(
             "created_at", direction=firestore.Query.DESCENDING
         )
         return [
             PatchValidationRun.model_validate(snapshot.to_dict() or {})
+            for snapshot in query.stream()
+        ]
+
+    def save_pull_request_record(self, record: GitHubPullRequestRecord) -> GitHubPullRequestRecord:
+        self._analyses.document(record.analysis_id).collection(_PULL_REQUESTS).document(
+            record.pr_record_id
+        ).set(record.model_dump(mode="python"))
+        return record
+
+    def get_pull_request_record(
+        self, analysis_id: str, pr_record_id: str
+    ) -> GitHubPullRequestRecord | None:
+        snapshot = (
+            self._analyses.document(analysis_id)
+            .collection(_PULL_REQUESTS)
+            .document(pr_record_id)
+            .get()
+        )
+        if not snapshot.exists:
+            return None
+        return GitHubPullRequestRecord.model_validate(snapshot.to_dict() or {})
+
+    def get_pull_request_by_fingerprint(
+        self, analysis_id: str, fingerprint: str
+    ) -> GitHubPullRequestRecord | None:
+        collection = self._analyses.document(analysis_id).collection(_PULL_REQUESTS)
+        for snapshot in collection.stream():
+            data = snapshot.to_dict() or {}
+            if data.get("request_fingerprint") == fingerprint:
+                return GitHubPullRequestRecord.model_validate(data)
+        return None
+
+    def list_pull_request_records(self, analysis_id: str) -> list[GitHubPullRequestRecord]:
+        query = (
+            self._analyses.document(analysis_id)
+            .collection(_PULL_REQUESTS)
+            .order_by("created_at", direction=firestore.Query.DESCENDING)
+        )
+        return [
+            GitHubPullRequestRecord.model_validate(snapshot.to_dict() or {})
             for snapshot in query.stream()
         ]
 
@@ -580,12 +592,9 @@ class FirestoreAnalysisRepository(AnalysisRepository):
         data = snapshot.to_dict() or {}
         fingerprint = str(data.get("request_fingerprint", ""))
 
-        pipeline_snapshots = list(
-            analysis_ref.collection(_PIPELINE).stream()
-        )
+        pipeline_snapshots = list(analysis_ref.collection(_PIPELINE).stream())
         stage_ids = [
-            str((stage.to_dict() or {}).get("stage_id", ""))
-            for stage in pipeline_snapshots
+            str((stage.to_dict() or {}).get("stage_id", "")) for stage in pipeline_snapshots
         ]
 
         self.client.recursive_delete(analysis_ref)
@@ -620,11 +629,7 @@ class FirestoreAnalysisRepository(AnalysisRepository):
         if not analysis_id or not stage_doc_id:
             raise RuntimeError("The Firestore pipeline stage index is invalid.")
 
-        return (
-            self._analyses.document(analysis_id)
-            .collection(_PIPELINE)
-            .document(stage_doc_id)
-        )
+        return self._analyses.document(analysis_id).collection(_PIPELINE).document(stage_doc_id)
 
     def _commit_sets(
         self,
@@ -690,9 +695,7 @@ class FirestoreAnalysisRepository(AnalysisRepository):
                     "completed_at": completed_at,
                     "old_contract": comparison.old_contract.model_dump(mode="json"),
                     "new_contract": comparison.new_contract.model_dump(mode="json"),
-                    "comparison_summary": comparison.summary.model_dump(
-                        mode="json"
-                    ),
+                    "comparison_summary": comparison.summary.model_dump(mode="json"),
                     "repository_summary": _model_data(repository_summary),
                     "impact_summary": _model_data(impact_summary),
                 },
@@ -733,6 +736,7 @@ def _analysis_record_from_data(data: dict[str, Any]) -> AnalysisRecord:
         ),
         repository_url=data.get("repository_url"),
         repository_ref=data.get("repository_ref"),
+        repository_commit_sha=data.get("repository_commit_sha"),
     )
 
 
@@ -780,19 +784,13 @@ def _without(
     data: dict[str, Any],
     *keys: str,
 ) -> dict[str, Any]:
-    return {
-        key: value
-        for key, value in data.items()
-        if key not in keys
-    }
+    return {key: value for key, value in data.items() if key not in keys}
 
 
 def _safe_match_trace(trace: list[Any]) -> list[dict[str, Any]]:
     safe: list[dict[str, Any]] = []
     for step in trace[:10]:
         data = step.model_dump(mode="json")
-        data["evidence"] = redact_secrets(str(data.get("evidence", ""))[:240])[0][
-            :240
-        ]
+        data["evidence"] = redact_secrets(str(data.get("evidence", ""))[:240])[0][:240]
         safe.append(data)
     return safe

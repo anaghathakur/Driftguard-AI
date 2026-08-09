@@ -43,6 +43,7 @@ class AnalysisSubmission:
     repository_source_type: RepositorySourceType | None = None
     repository_url: str | None = None
     repository_ref: str | None = None
+    repository_commit_sha: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -68,6 +69,7 @@ class AnalysisRecord:
     repository_source_type: RepositorySourceType | None = None
     repository_url: str | None = None
     repository_ref: str | None = None
+    repository_commit_sha: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

@@ -55,6 +55,7 @@ from apps.api.app.schemas.impact import (
 )
 from apps.api.app.schemas.migration import MigrationRecommendation
 from apps.api.app.schemas.patch import PatchProposal
+from apps.api.app.schemas.pull_request import GitHubPullRequestRecord
 from apps.api.app.schemas.risk import RiskPrediction
 from apps.api.app.schemas.validation import PatchValidationRun
 from apps.api.app.services.comparison import SpecificationComparisonService
@@ -65,20 +66,17 @@ ANALYSIS_PIPELINE_VERSION = "5.0.0"
 
 class AnalysisPipelineService:
     def __init__(
-    self,
-    repository: AnalysisRepository,
-    risk_classifier: RiskClassifier,
-    migration_service: MigrationRecommendationService | None = None,
+        self,
+        repository: AnalysisRepository,
+        risk_classifier: RiskClassifier,
+        migration_service: MigrationRecommendationService | None = None,
     ) -> None:
         self.repository = repository
         self.risk_classifier = risk_classifier
 
-        self.migration_service = (
-            migration_service
-            or MigrationRecommendationService(
-                MockMigrationRecommendationProvider()
-            )
-        )   
+        self.migration_service = migration_service or MigrationRecommendationService(
+            MockMigrationRecommendationProvider()
+        )
 
     def compare(
         self,
@@ -117,7 +115,10 @@ class AnalysisPipelineService:
                 new_content=new_content,
             ),
         ).model_copy(
-            update={"analysis_id": creation.analysis.analysis_id, "duplicate": False}
+            update={
+                "analysis_id": creation.analysis.analysis_id,
+                "duplicate": False,
+            }
         )
         risk_predictions = pipeline.run(
             "classify_risk",
@@ -162,6 +163,7 @@ class AnalysisPipelineService:
         repository_source_type: RepositorySourceType = RepositorySourceType.ZIP,
         repository_url: str | None = None,
         repository_ref: str | None = None,
+        repository_commit_sha: str | None = None,
     ) -> ImpactAnalysisResponse:
         creation = self.repository.create_or_get(
             _submission(
@@ -175,6 +177,7 @@ class AnalysisPipelineService:
                 repository_source_type=repository_source_type,
                 repository_url=repository_url,
                 repository_ref=repository_ref,
+                repository_commit_sha=repository_commit_sha,
             )
         )
         if creation.duplicate:
@@ -197,13 +200,14 @@ class AnalysisPipelineService:
                 new_content=new_content,
             ),
         ).model_copy(
-            update={"analysis_id": creation.analysis.analysis_id, "duplicate": False}
+            update={
+                "analysis_id": creation.analysis.analysis_id,
+                "duplicate": False,
+            }
         )
         scan = pipeline.run(
             "scan_repository",
-            lambda: RepositoryArchiveScanner().scan(
-                repository_filename, repository_content
-            ),
+            lambda: RepositoryArchiveScanner().scan(repository_filename, repository_content),
         )
         impact_result = pipeline.run(
             "match_api_usage",
@@ -221,9 +225,7 @@ class AnalysisPipelineService:
             skipped_reasons=scan.skipped_reasons,
             code_analysis=impact_result.code_analysis,
         )
-        impacted_paths = {
-            match.file_path for impact in impacts for match in impact.matches
-        }
+        impacted_paths = {match.file_path for impact in impacts for match in impact.matches}
         impact_summary = ImpactSummary(
             total_changes=len(comparison.changes),
             impacted_changes=sum(bool(impact.matches) for impact in impacts),
@@ -254,13 +256,13 @@ class AnalysisPipelineService:
             migration_recommendations=migration_recommendations,
         )
         return ImpactAnalysisResponse(
-        analysis_id=creation.analysis.analysis_id,
-        duplicate=creation.duplicate,
-        comparison=comparison,
-        repository=repository_summary,
-        impact_summary=impact_summary,
-        impacts=impacts,
-    )
+            analysis_id=creation.analysis.analysis_id,
+            duplicate=creation.duplicate,
+            comparison=comparison,
+            repository=repository_summary,
+            impact_summary=impact_summary,
+            impacts=impacts,
+        )
 
     def list_analyses(self, *, limit: int, offset: int) -> list[AnalysisListItem]:
         return [
@@ -319,19 +321,14 @@ class AnalysisPipelineService:
     ) -> list[MigrationRecommendation]:
         self._require_analysis(analysis_id)
 
-        return self.repository.get_migration_recommendations(
-            analysis_id
-        )
-
+        return self.repository.get_migration_recommendations(analysis_id)
 
     def get_migration_recommendation(
         self,
         analysis_id: str,
         change_id: str,
     ) -> MigrationRecommendation:
-        recommendations = self.get_migration_recommendations(
-            analysis_id
-        )
+        recommendations = self.get_migration_recommendations(analysis_id)
 
         for recommendation in recommendations:
             if recommendation.change_id == change_id:
@@ -339,10 +336,7 @@ class AnalysisPipelineService:
 
         raise DriftGuardError(
             code="migration_recommendation_not_found",
-            message=(
-                "The requested migration recommendation "
-                "does not exist."
-            ),
+            message=("The requested migration recommendation does not exist."),
             status_code=404,
         )
 
@@ -357,10 +351,12 @@ class AnalysisPipelineService:
     def get_patch_validations(self, analysis_id: str) -> list[PatchValidationRun]:
         validations: list[PatchValidationRun] = []
         for patch in self.get_patch_proposals(analysis_id):
-            validations.extend(
-                self.repository.list_patch_validations(analysis_id, patch.patch_id)
-            )
+            validations.extend(self.repository.list_patch_validations(analysis_id, patch.patch_id))
         return sorted(validations, key=lambda item: item.created_at, reverse=True)
+
+    def get_pull_request_records(self, analysis_id: str) -> list[GitHubPullRequestRecord]:
+        self._require_analysis(analysis_id)
+        return self.repository.list_pull_request_records(analysis_id)
 
     def _duplicate_comparison(self, record: AnalysisRecord) -> ComparisonResponse:
         self._raise_unless_succeeded(record)
@@ -394,9 +390,7 @@ class AnalysisPipelineService:
             duplicate=True,
         )
 
-    def _stored_comparison(
-        self, record: AnalysisRecord, *, duplicate: bool
-    ) -> ComparisonResponse:
+    def _stored_comparison(self, record: AnalysisRecord, *, duplicate: bool) -> ComparisonResponse:
         return ComparisonResponse(
             old_contract=ContractMetadata.model_validate(record.old_contract),
             new_contract=ContractMetadata.model_validate(record.new_contract),
@@ -459,6 +453,7 @@ class AnalysisPipelineService:
                     source_type=record.repository_source_type,
                     repository_url=record.repository_url,
                     repository_ref=record.repository_ref,
+                    repository_commit_sha=record.repository_commit_sha,
                 )
                 if record.repository_source_type is not None
                 else None
@@ -502,9 +497,7 @@ class _PipelineExecution:
         except Exception as exc:
             self._fail(stage_id, stage_name, started_at, started_clock, exc)
         completed_at = _utc_now()
-        self.repository.complete_stage(
-            stage_id, completed_at, _duration_ms(started_clock)
-        )
+        self.repository.complete_stage(stage_id, completed_at, _duration_ms(started_clock))
         return result
 
     def persist(
@@ -515,9 +508,7 @@ class _PipelineExecution:
         impact_summary: ImpactSummary | None = None,
         impacts: list[ChangeImpact] | None = None,
         risk_predictions: list[RiskPrediction] | None = None,
-        migration_recommendations: (
-            list[MigrationRecommendation] | None
-        ) = None,
+        migration_recommendations: (list[MigrationRecommendation] | None) = None,
     ) -> None:
         stage_name = "persist_results"
         stage_id, started_at, started_clock = self._start(stage_name)
@@ -529,9 +520,7 @@ class _PipelineExecution:
                 impact_summary=impact_summary,
                 impacts=impacts or [],
                 risk_predictions=risk_predictions or [],
-                migration_recommendations=(
-                    migration_recommendations or []
-                ),
+                migration_recommendations=(migration_recommendations or []),
                 stage_id=stage_id,
                 completed_at=_utc_now(),
                 duration_ms=_duration_ms(started_clock),
@@ -582,13 +571,12 @@ def _submission(
     repository_source_type: RepositorySourceType | None = None,
     repository_url: str | None = None,
     repository_ref: str | None = None,
+    repository_commit_sha: str | None = None,
 ) -> AnalysisSubmission:
     old_hash = hashlib.sha256(old_content).hexdigest()
     new_hash = hashlib.sha256(new_content).hexdigest()
     repository_hash = (
-        hashlib.sha256(repository_content).hexdigest()
-        if repository_content is not None
-        else None
+        hashlib.sha256(repository_content).hexdigest() if repository_content is not None else None
     )
     fingerprint_source = json.dumps(
         {
@@ -602,6 +590,7 @@ def _submission(
             ),
             "repository_url": repository_url,
             "repository_ref": repository_ref,
+            "repository_commit_sha": repository_commit_sha,
         },
         sort_keys=True,
         separators=(",", ":"),
@@ -621,6 +610,7 @@ def _submission(
         repository_source_type=repository_source_type,
         repository_url=repository_url,
         repository_ref=repository_ref,
+        repository_commit_sha=repository_commit_sha,
     )
 
 

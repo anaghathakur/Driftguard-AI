@@ -8,6 +8,7 @@ import {
   analyzeGitHubRepositoryImpact,
   analyzeRepositoryImpact,
   compareSpecifications,
+  createPullRequest,
   generatePatchProposal,
   getAnalyses,
   getAnalysisChanges,
@@ -21,15 +22,18 @@ import {
   getPatchValidation,
   getPatchValidations,
   getRiskPredictions,
+  previewPullRequest,
   validatePatchProposal,
   type AnalysisHistoryItem,
   type ApiChange,
   type ComparisonResponse,
+  type GitHubPullRequestRecord,
   type ImpactAnalysisResponse,
   type MigrationProviderStatus,
   type MigrationRecommendation,
   type PatchProposal,
   type PatchValidationRun,
+  type PullRequestPreview,
   type PersistedMatch,
   type RepositoryMatch,
   type RiskPrediction,
@@ -1468,7 +1472,14 @@ function PatchProposalPanel({
                 {validationError}
               </p>
             )}
-            {validation && <PatchValidationPanel validation={validation} />}
+            {validation && (
+              <PatchValidationPanel
+                key={validation.validation_id}
+                analysisId={analysisId}
+                patchId={proposal.patch_id}
+                validation={validation}
+              />
+            )}
           </div>
           <div className="overflow-hidden rounded-lg border border-white/10 bg-slate-950">
             <div className="border-b border-white/10 px-4 py-3 text-xs text-slate-400">
@@ -1499,10 +1510,20 @@ function PatchProposalPanel({
 }
 
 function PatchValidationPanel({
+  analysisId,
+  patchId,
   validation,
 }: {
+  analysisId: string;
+  patchId: string;
   validation: PatchValidationRun;
 }) {
+  const [preview, setPreview] = useState<PullRequestPreview | null>(null);
+  const [pullRequest, setPullRequest] =
+    useState<GitHubPullRequestRecord | null>(null);
+  const [isPreviewing, setIsPreviewing] = useState(false);
+  const [isCreating, setIsCreating] = useState(false);
+  const [pullRequestError, setPullRequestError] = useState<string | null>(null);
   const readinessLabel = validation.readiness.replaceAll("_", " ").toUpperCase();
   const readinessClass =
     validation.readiness === "ready_for_review"
@@ -1518,6 +1539,144 @@ function PatchValidationPanel({
           {validation.passed_count} passed · {validation.warning_count} warnings ·{" "}
           {validation.failed_count} failed · {validation.unknown_count} unknown
         </p>
+      </div>
+      <div className="rounded-lg border border-violet-400/20 bg-violet-400/5 p-4">
+        <p className="text-xs font-semibold uppercase tracking-[0.18em] text-violet-300">
+          GitHub pull request
+        </p>
+        {validation.readiness === "needs_review" && (
+          <p className="mt-2 text-sm text-amber-100">
+            Resolve validation warnings before creating a pull request.
+          </p>
+        )}
+        {validation.readiness === "blocked" && (
+          <p className="mt-2 text-sm text-rose-200">
+            Patch is blocked and cannot create a pull request.
+          </p>
+        )}
+        {validation.readiness === "ready_for_review" && !preview && !pullRequest && (
+          <div className="mt-3">
+            <p className="text-sm leading-6 text-slate-300">
+              DriftGuard will reverify the exact repository snapshot and validated patch
+              before any GitHub write.
+            </p>
+            <button
+              type="button"
+              onClick={() => {
+                if (isPreviewing) return;
+                setIsPreviewing(true);
+                setPullRequestError(null);
+                void previewPullRequest(
+                  analysisId,
+                  patchId,
+                  validation.validation_id,
+                )
+                  .then(setPreview)
+                  .catch((error: unknown) => {
+                    setPullRequestError(
+                      error instanceof Error
+                        ? error.message
+                        : "The pull request could not be prepared safely.",
+                    );
+                  })
+                  .finally(() => setIsPreviewing(false));
+              }}
+              disabled={isPreviewing}
+              className="mt-3 rounded-lg bg-violet-300 px-4 py-2 text-sm font-semibold text-slate-950 transition hover:bg-violet-200 disabled:cursor-wait disabled:opacity-60"
+            >
+              {isPreviewing ? "Reverifying source..." : "Create GitHub Pull Request"}
+            </button>
+          </div>
+        )}
+        {preview && !pullRequest && (
+          <div className="mt-4 rounded-lg border border-cyan-400/20 bg-black/20 p-4">
+            <p className="font-semibold text-white">Create Pull Request?</p>
+            <dl className="mt-3 grid gap-3 text-sm sm:grid-cols-2">
+              <ConfirmationItem
+                label="Repository"
+                value={`${preview.repository_owner}/${preview.repository_name}`}
+              />
+              <ConfirmationItem
+                label="Base"
+                value={`${preview.base_ref} @ ${preview.base_commit_sha.slice(0, 12)}`}
+              />
+              <ConfirmationItem label="New branch" value={preview.branch_name} />
+              <ConfirmationItem
+                label="Patch"
+                value={`${preview.files_changed} file · ${preview.edit_count} edits`}
+              />
+              <ConfirmationItem label="Validation" value="READY FOR REVIEW" />
+              <ConfirmationItem label="Tests" value="Not executed" />
+            </dl>
+            <div className="mt-4 flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  if (isCreating) return;
+                  setIsCreating(true);
+                  setPullRequestError(null);
+                  void createPullRequest(
+                    analysisId,
+                    patchId,
+                    validation.validation_id,
+                  )
+                    .then(setPullRequest)
+                    .catch((error: unknown) => {
+                      setPullRequestError(
+                        error instanceof Error
+                          ? error.message
+                          : "GitHub could not create the pull request safely.",
+                      );
+                    })
+                    .finally(() => setIsCreating(false));
+                }}
+                disabled={isCreating}
+                className="rounded-lg bg-cyan-300 px-4 py-2 text-sm font-semibold text-slate-950 transition hover:bg-cyan-200 disabled:cursor-wait disabled:opacity-60"
+              >
+                {isCreating ? "Creating review branch..." : "Confirm Create Pull Request"}
+              </button>
+              <button
+                type="button"
+                onClick={() => setPreview(null)}
+                disabled={isCreating}
+                className="rounded-lg border border-white/15 px-4 py-2 text-sm text-slate-300 transition hover:bg-white/5 disabled:opacity-60"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
+        {pullRequest && (
+          <div className="mt-4 rounded-lg border border-emerald-400/25 bg-emerald-400/10 p-4">
+            <p className="font-semibold text-emerald-100">Pull Request Created</p>
+            <p className="mt-2 text-sm text-emerald-200">
+              PR #{pullRequest.pull_request_number} · {pullRequest.repository_owner}/
+              {pullRequest.repository_name}
+            </p>
+            <p className="mt-1 break-all text-xs text-slate-300">
+              Branch: {pullRequest.branch_name} · Commit: {pullRequest.commit_sha?.slice(0, 12)}
+            </p>
+            {pullRequest.pull_request_url && (
+              <a
+                href={pullRequest.pull_request_url}
+                target="_blank"
+                rel="noreferrer"
+                className="mt-3 inline-flex text-sm font-semibold text-cyan-200 underline decoration-cyan-400/40 underline-offset-4 hover:text-cyan-100"
+              >
+                Open GitHub Pull Request
+              </a>
+            )}
+            <p className="mt-3 text-xs leading-5 text-slate-300">
+              DriftGuard created a review branch and pull request. It did not merge or
+              deploy the change. Repository tests were not executed.
+            </p>
+          </div>
+        )}
+        {pullRequestError && (
+          <p className="mt-3 rounded border border-rose-400/20 bg-rose-400/10 p-3 text-sm text-rose-100">
+            {pullRequestError}
+          </p>
+        )}
       </div>
       <ValidationFindingGroup title="Contract checks" findings={validation.contract_findings} />
       <ValidationFindingGroup title="Dependency checks" findings={validation.dependency_findings} />
@@ -1558,6 +1717,17 @@ function PatchValidationPanel({
           ))}
         </div>
       </div>
+    </div>
+  );
+}
+
+function ConfirmationItem({ label, value }: { label: string; value: string }) {
+  return (
+    <div>
+      <dt className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+        {label}
+      </dt>
+      <dd className="mt-1 break-all text-slate-200">{value}</dd>
     </div>
   );
 }

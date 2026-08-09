@@ -31,6 +31,7 @@ class GitHubRepositoryArchive:
     ref: str | None
     filename: str
     content: bytes
+    commit_sha: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -91,10 +92,7 @@ def validate_github_ref(ref: str | None) -> str | None:
         or ".." in value
         or "//" in value
         or "@{" in value
-        or any(
-            component.startswith(".") or component.endswith(".lock")
-            for component in components
-        )
+        or any(component.startswith(".") or component.endswith(".lock") for component in components)
     ):
         raise DriftGuardError(
             code="invalid_github_ref",
@@ -180,6 +178,7 @@ class GitHubRepositorySource:
             ref=validated_ref,
             filename=filename,
             content=content,
+            commit_sha=_archive_commit_sha(redirect_url),
         )
 
     @staticmethod
@@ -355,6 +354,14 @@ class GitHubRepositorySource:
 
 def _safe_filename_part(value: str) -> str:
     return re.sub(r"[^A-Za-z0-9._-]+", "-", value).strip(".-")[:100] or "default"
+
+
+def _archive_commit_sha(archive_url: str) -> str | None:
+    """Extract GitHub's immutable archive commit when present in its trusted redirect."""
+
+    path = urlparse(archive_url).path.rstrip("/")
+    candidate = path.rsplit("/", 1)[-1].lower()
+    return candidate if re.fullmatch(r"[a-f0-9]{40}", candidate) else None
 
 
 def _invalid_repository_url() -> DriftGuardError:

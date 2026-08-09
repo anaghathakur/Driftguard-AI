@@ -5,11 +5,76 @@ classifies change risk with explainable local models, and keeps a local analysis
 
 ## Current milestone
 
-Phase 13 adds patch validation and test intelligence to the existing OpenAPI comparison, deep
-impact analysis, monitoring, ML risk, migration guidance, review-only patch proposals,
-persistence, reporting, and React dashboard. DriftGuard can now compare a proposed patch with the
-new contract, inspect deterministic caller problems, discover related tests, surface test gaps,
-and recommend a bounded test plan without executing repository code or tests.
+Phase 14 adds an explicit, safety-gated GitHub Pull Request workflow to the existing OpenAPI
+comparison, deep impact analysis, monitoring, migration, patch, and validation pipeline. A
+developer can take an exact `READY_FOR_REVIEW` Phase 13 validation, inspect a server-derived
+confirmation, and create an idempotent review branch and Pull Request without executing repository
+code, running tests, force pushing, merging, or deploying.
+
+## GitHub Pull Request workflow
+
+Pull Request creation is available only for a GitHub-backed analysis with an immutable resolved
+commit SHA, a validated Phase 12 proposal, and the exact Phase 13 validation in
+`READY_FOR_REVIEW`. `NEEDS_REVIEW` and `BLOCKED` are intentionally ineligible; there is no force
+override. ZIP-upload analyses remain supported by the existing workflows but cannot infer a
+canonical GitHub owner/repository and return `github_source_required` for PR creation.
+
+The frontend performs no GitHub action on page load. The developer first selects **Create GitHub
+Pull Request**, which makes a read-only preview request and displays the repository, immutable base
+commit, deterministic `driftguard/<analysis>-<patch>` branch, file/edit counts, readiness, and the
+fact that tests were not executed. Only a second **Confirm Create Pull Request** action can invoke
+the write endpoint.
+
+Immediately before the first write, DriftGuard:
+
+1. reloads the analysis, proposal, and exact validation and checks their relationships;
+2. resolves the configured ref and verifies it still equals the persisted immutable base SHA;
+3. re-fetches through the bounded secure GitHub archive source and verifies the analysis, patch,
+   and validation snapshot hashes;
+4. reapplies only the persisted structured edits in memory through the trusted Phase 12 validator;
+5. requires the reproduced paths and unified diff to exactly equal the validated proposal; and
+6. builds bounded commit and PR metadata from trusted contract/impact/validation fields.
+
+The write provider then creates Git blobs/tree/commit from the exact verified file contents,
+creates or reconciles the deterministic review branch from the verified base commit, updates it
+with `force: false`, and opens or finds the matching Pull Request. It never updates `main`,
+`master`, or the repository default branch directly. A fingerprint over analysis, patch,
+validation, snapshot, base SHA, and pull-request profile `1.0.0` makes successful retries
+idempotent. Preparing/failed records retain enough safe state to reconcile a branch, commit, or PR
+after a partial failure or ambiguous timeout without blindly duplicating writes.
+
+Endpoints:
+
+- `GET /api/v1/analyses/{analysis_id}/patches/{patch_id}/validations/{validation_id}/pull-request/preview`
+- `POST /api/v1/analyses/{analysis_id}/patches/{patch_id}/validations/{validation_id}/pull-request`
+- `GET /api/v1/analyses/{analysis_id}/pull-requests`
+- `GET /api/v1/analyses/{analysis_id}/pull-requests/{pr_record_id}`
+
+`MockGitHubWriteProvider` is the zero-cost default and performs no network write. Real writes use
+`GitHubAppWriteProvider`: the server signs a short-lived app JWT from a configured private-key
+file, resolves the repository installation, obtains a repository-scoped installation token in
+memory, and uses GitHub REST APIs. No PAT input exists, and private keys, JWTs, installation
+tokens, and authorization headers are never stored in SQLite/Firestore, returned by APIs, sent to
+AI providers, or placed in `.env.example`.
+
+Create and install a dedicated GitHub App for a real test as follows:
+
+1. Grant only **Contents: Read and write**, **Pull requests: Read and write**, and the automatic
+   **Metadata: Read-only** repository permission. Do not grant Actions, Administration, Secrets,
+   Issues, or Members permissions.
+2. Install the app only on a dedicated demo repository such as `driftguard-demo-client`.
+3. Download its private key to a secure server-only path outside source control; do not copy the
+   key into an environment variable or this repository.
+4. Set `DRIFTGUARD_GITHUB_APP_ID`, `DRIFTGUARD_GITHUB_APP_PRIVATE_KEY_PATH`, and
+   `DRIFTGUARD_GITHUB_WRITE_PROVIDER=github_app`, then restart the API.
+5. Run a fresh GitHub-backed analysis against that demo repository, generate and validate its
+   patch, inspect the preview, and explicitly confirm creation. Stop after the PR opens; do not
+   merge it for acceptance testing.
+
+PR records contain bounded non-secret metadata in SQLite or a Firestore analysis subcollection
+and appear in JSON/PDF reports. Deleting an analysis cascades only local PR metadata; it never
+closes or deletes the real GitHub PR. DriftGuard does not execute CI or tests, post review
+comments, automatically update PRs after upstream changes, merge, deploy, or release.
 
 ## Patch validation and test intelligence
 
@@ -79,9 +144,9 @@ DRIFTGUARD_MAX_TEST_PLAN_CASES=12
 DRIFTGUARD_MAX_TEST_CONTEXT_BYTES=40000
 ```
 
-This phase performs static validation only. It never imports repository modules, runs Python or
-JavaScript, executes tests/builds/package managers/scripts, applies a patch to a repository,
-creates Git branches or commits, pushes code, creates pull requests, or deploys anything.
+Phase 13 validation itself remains static-only. It never imports repository modules, runs Python
+or JavaScript, executes tests/builds/package managers/scripts, or writes a repository. Phase 14
+may later use the already validated structured edits for an explicit review branch and PR only.
 
 ## AI-assisted proposed patch generation
 
@@ -309,6 +374,7 @@ The response includes `analysis_id` and `duplicate`. Use the ID with:
 - `GET /api/v1/analyses/{analysis_id}/patches`
 - `GET /api/v1/analyses/{analysis_id}/patches/{patch_id}`
 - `POST /api/v1/analyses/{analysis_id}/patches`
+- `GET /api/v1/analyses/{analysis_id}/pull-requests`
 - `DELETE /api/v1/analyses/{analysis_id}`
 
 Use `GET /api/v1/risk/model` to inspect the active model version, artifact checksum,
@@ -352,7 +418,7 @@ dependency injection. Separate repository ports have SQLite local-default and Fi
 Deterministic contract and impact logic remains independent of scheduling and repository
 acquisition.
 
-The Phase 12 monitoring and manual patch flow is:
+The Phase 14 monitoring and human-controlled review flow is:
 
 ```text
 create monitor -> secure OpenAPI fetch -> validate -> persist bounded V1 baseline
@@ -361,6 +427,8 @@ scheduled/manual check -> secure fetch -> compare SHA-256
   changed -> GitHub impact pipeline -> semantic code graph + lexical fallback
           -> ML + migration -> persist analysis -> atomically store check + V2
           -> developer explicitly requests snapshot-verified proposed patch
+          -> developer validates patch -> READY_FOR_REVIEW
+          -> developer previews and explicitly confirms GitHub Pull Request
   failed -> safe check history error -> retain V1 for retry
 ```
 
@@ -374,6 +442,8 @@ SQLite contains the existing analysis tables plus two monitoring tables:
 - `pipeline_stages` belongs to an analysis;
 - `analysis_failures` belongs to an analysis.
 - `patch_proposals` belongs to an analysis and stores bounded review-only proposal data.
+- `patch_validation_runs` belongs to an exact proposal and stores static validation intelligence.
+- `github_pull_request_records` stores bounded non-secret preparing/created/failed workflow state.
 - `api_monitors` stores configuration, bounded baseline content, hashes, and latest status;
 - `monitor_checks` stores newest-first unchanged, changed, and failed check history.
 
@@ -385,8 +455,9 @@ stay below its per-document size limit. Repository archives remain transient on 
 - Only OpenAPI 3.x is accepted.
 - Only local JSON Pointer `$ref` values are resolved; remote references are rejected.
 - Schema comparison currently focuses on object properties relevant to the MVP, including nested properties represented as dotted paths.
-- Repository input supports uploaded ZIPs and public GitHub repositories. Private repositories,
-  GitHub authentication/App installation, and remote Git cloning are not included.
+- Repository acquisition supports uploaded ZIPs and public GitHub archives. GitHub App writes are
+  limited to repositories where the app is explicitly installed; private archive acquisition and
+  end-user SaaS installation onboarding are not included.
 - Remote OpenAPI monitoring requires a publicly reachable HTTPS endpoint; private/internal API
   endpoints are intentionally rejected by SSRF controls.
 - The process-local scheduler is suitable for a single-worker MVP, not distributed scheduling.
@@ -423,6 +494,8 @@ stay below its per-document size limit. Repository archives remain transient on 
   JavaScript, and TypeScript files with exact textual edit anchors. Complex refactors, dynamic
   data flow, external package graphs, formatting, semantic type checking, and repository tests
   remain outside static validation.
-- A validated proposal is not proof that the application compiles, passes tests, or behaves
-  correctly. Developers must review and apply it manually. Automatic patch application, Git
-  commits, branches, pushes, and pull requests are not implemented.
+- A validated proposal or created PR is not proof that the application compiles, passes tests, or
+  behaves correctly. Phase 14 creates only an explicitly confirmed review branch and PR from the
+  exact validated patch; test execution, force push, automatic merge, deployment, and ongoing PR
+  synchronization are not implemented. Historical GitHub analyses without an immutable source
+  commit remain readable but must be rerun before they are eligible for PR creation.
