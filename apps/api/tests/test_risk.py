@@ -141,10 +141,10 @@ def test_missing_model_uses_safe_deterministic_fallback(base_spec, clone):
 
 
 def test_checksum_mismatch_uses_fallback_without_loading_artifact(
-    analysis_repository, base_spec, clone
+    tmp_path, base_spec, clone
 ):
-    artifact_path = analysis_repository.database_path.parent / "tampered.joblib"
-    metadata_path = analysis_repository.database_path.parent / "tampered.json"
+    artifact_path = tmp_path / "tampered.joblib"
+    metadata_path = tmp_path / "tampered.json"
     artifact_path.write_bytes(b"untrusted bytes that must not be deserialized")
     metadata_path.write_text(
         json.dumps(

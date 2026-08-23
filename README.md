@@ -1,5 +1,7 @@
 # DriftGuard AI
 
+[![CI](https://github.com/anaghathakur/Driftguard-AI/actions/workflows/ci.yml/badge.svg)](https://github.com/anaghathakur/Driftguard-AI/actions/workflows/ci.yml)
+
 **Detect breaking API changes before they break production code.**
 
 DriftGuard AI is an API Change Impact & Migration Intelligence Platform that detects OpenAPI contract drift, identifies affected source code across repositories, estimates migration risk, generates migration guidance, proposes bounded code changes, validates those changes statically, discovers related tests, and prepares human-reviewed GitHub Pull Requests.
@@ -951,7 +953,7 @@ The default local configuration should use local persistence and mock providers 
 ### 5. Start the backend
 
 ```powershell
-.\.venv\Scripts\python.exe -m uvicorn apps.api.app.main:app --reload
+.\.venv\Scripts\python.exe -m uvicorn apps.api.app.main:app --reload --env-file .env
 ```
 
 Backend:
@@ -979,17 +981,18 @@ Open another PowerShell window:
 ```powershell
 cd apps\web
 npm install
+Copy-Item .env.example .env
 ```
 
 ### 7. Configure frontend API URL
 
-The frontend reads:
+The frontend reads `apps/web/.env`:
 
 ```text
 VITE_API_BASE_URL
 ```
 
-For local development:
+The included example uses:
 
 ```text
 VITE_API_BASE_URL=http://127.0.0.1:8000
@@ -1344,6 +1347,10 @@ Reports may include available analysis, impact, risk, migration, patch, validati
 ---
 
 ## Testing
+
+Every push to `main` and every Pull Request runs the same backend and frontend quality gates in
+GitHub Actions. The workflow has read-only repository permissions and receives no application
+secrets.
 
 Run the complete backend suite:
 
