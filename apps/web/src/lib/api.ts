@@ -506,6 +506,23 @@ export async function analyzeRepositoryImpact(
   );
 }
 
+export async function analyzeConnectedRepositoryImpact(
+  oldSpec: File,
+  newSpec: File,
+  repositoryId: string,
+  ref?: string,
+): Promise<ImpactAnalysisResponse> {
+  const formData = new FormData();
+  formData.append("old_spec", oldSpec);
+  formData.append("new_spec", newSpec);
+  formData.append("repository_id", repositoryId);
+  if (ref?.trim()) formData.append("ref", ref.trim());
+  return requestJson<ImpactAnalysisResponse>("/api/v1/impact/analyze/connected", {
+    method: "POST",
+    body: formData,
+  });
+}
+
 export async function analyzeGitHubRepositoryImpact(
   oldSpec: File,
   newSpec: File,
@@ -727,7 +744,11 @@ export async function deleteMonitor(
 ): Promise<void> {
   const response = await fetch(
     `${API_BASE_URL}/api/v1/monitors/${monitorId}`,
-    { method: "DELETE" },
+    {
+      method: "DELETE",
+      credentials: "include",
+      headers: csrfToken ? { "X-CSRF-Token": csrfToken } : undefined,
+    },
   );
   if (!response.ok) {
     throw new Error(await getErrorMessage(response));
@@ -751,7 +772,73 @@ export async function getMonitorChecks(
   );
 }
 
-async function requestJson<T>(
+export type WorkspaceSummary = { id: string; name: string; slug: string; role: "owner" | "member" };
+export type AuthStatus = {
+  mode: "local" | "github";
+  authenticated: boolean;
+  user: { id: string; github_login: string; github_display_name: string | null; avatar_url: string | null } | null;
+  workspace: WorkspaceSummary | null;
+  workspaces: WorkspaceSummary[];
+  csrf_token: string | null;
+};
+export type GitHubInstallation = { id: string; github_installation_id: number; account_id: number; account_login: string; account_type: string; connected_at: string; revoked: boolean };
+export type RepositoryConnection = { id: string; installation_id: string; github_repository_id: number; owner: string; name: string; full_name: string; default_branch: string; private: boolean; html_url: string; enabled: boolean; last_synced_at: string; removed: boolean };
+
+let csrfToken: string | null = null;
+
+export async function getAuthStatus(): Promise<AuthStatus> {
+  const status = await requestJson<AuthStatus>("/api/v1/auth/status");
+  csrfToken = status.csrf_token;
+  return status;
+}
+
+export function githubSignInUrl(): string {
+  return `${API_BASE_URL}/api/v1/auth/github/start`;
+}
+export function githubInstallationStartUrl(): string {
+  return `${API_BASE_URL}/api/v1/github/installations/start`;
+}
+
+export async function createWorkspace(name: string): Promise<WorkspaceSummary> {
+  return requestJson<WorkspaceSummary>("/api/v1/auth/workspaces", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name }),
+  });
+}
+
+export async function switchWorkspace(workspaceId: string): Promise<WorkspaceSummary> {
+  return requestJson<WorkspaceSummary>("/api/v1/auth/workspaces/switch", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ workspace_id: workspaceId }),
+  });
+}
+
+export async function getGitHubInstallations(): Promise<GitHubInstallation[]> {
+  return requestJson<GitHubInstallation[]>("/api/v1/github/installations");
+}
+export async function connectGitHubInstallation(githubInstallationId: number): Promise<GitHubInstallation> {
+  return requestJson<GitHubInstallation>("/api/v1/github/installations", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ github_installation_id: githubInstallationId }),
+  });
+}
+export async function syncGitHubInstallation(installationId: string): Promise<RepositoryConnection[]> {
+  return requestJson<RepositoryConnection[]>(`/api/v1/github/installations/${installationId}/sync`, { method: "POST" });
+}
+export async function getRepositoryConnections(): Promise<RepositoryConnection[]> {
+  return requestJson<RepositoryConnection[]>("/api/v1/github/repositories");
+}
+export async function setRepositoryConnectionEnabled(id: string, enabled: boolean): Promise<RepositoryConnection> {
+  return requestJson<RepositoryConnection>(`/api/v1/github/repositories/${id}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ enabled }),
+  });
+}
+export async function requestJson<T>(
   path: string,
   options?: RequestInit,
 ): Promise<T> {

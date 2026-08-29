@@ -1,0 +1,15 @@
+#api-monitors { margin-top: 0 !important; border: 1px solid var(--border) !important; border-radius: var(--radius) !important; background: var(--surface-low) !important; padding: 0 !important; box-shadow: none !important; backdrop-filter: none !important; }
+#api-monitors > div:first-child { display: none; }
+#api-monitors form { margin-top: 0 !important; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 12px !important; border: 0 !important; border-bottom: 1px solid var(--border) !important; border-radius: 0 !important; background: var(--surface-lowest) !important; padding: 18px !important; }
+#api-monitors form label > span { color: var(--text) !important; font-size: 10px !important; }
+#api-monitors form input { margin-top: 7px !important; min-height: 38px; border: 1px solid var(--border-strong) !important; border-radius: var(--radius-sm) !important; background: var(--surface) !important; padding: 8px 10px !important; color: var(--text) !important; font-size: 11px !important; }
+#api-monitors form button { min-height: 38px; border-radius: var(--radius-sm) !important; background: var(--cyan) !important; color: #00363e !important; font-size: 11px !important; }
+#api-monitors > .mt-6 { margin-top: 0 !important; padding: 10px; }
+#api-monitors article { border: 1px solid var(--border) !important; border-radius: var(--radius-sm) !important; background: var(--surface) !important; padding: 14px !important; }
+#api-monitors article h4 { color: var(--text) !important; font-size: 12px !important; }
+#api-monitors article p, #api-monitors article span { font-size: 10px; }
+#api-monitors article button { min-height: 30px; border-radius: var(--radius-sm) !important; padding: 6px 9px !important; font-size: 9px !important; }
+
+@media (max-width: 720px) {
+  #api-monitors form { grid-template-columns: 1fr; padding: 14px !important; }
+}

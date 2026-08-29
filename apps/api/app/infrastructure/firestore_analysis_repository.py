@@ -1,4 +1,5 @@
 """Google Cloud Firestore implementation of the analysis repository port."""
+# ruff: noqa: E501
 
 from __future__ import annotations
 
@@ -10,6 +11,10 @@ from google.api_core.exceptions import AlreadyExists
 from google.cloud import firestore
 
 from apps.api.app.core.redaction import redact_secrets
+from apps.api.app.core.workspace_context import (
+    LOCAL_WORKSPACE_ID,
+    current_workspace_id,
+)
 from apps.api.app.domain.analysis import (
     AnalysisCreation,
     AnalysisKind,
@@ -98,6 +103,7 @@ class FirestoreAnalysisRepository(AnalysisRepository):
             analysis_ref = self._analyses.document(analysis_id)
             analysis_data = {
                 "analysis_id": analysis_id,
+                "workspace_id": current_workspace_id(),
                 "kind": submission.kind.value,
                 "status": AnalysisStatus.RUNNING.value,
                 "request_fingerprint": submission.request_fingerprint,
@@ -336,15 +342,16 @@ class FirestoreAnalysisRepository(AnalysisRepository):
         limit: int,
         offset: int,
     ) -> list[AnalysisRecord]:
-        query = (
-            self._analyses.order_by(
-                "created_at",
-                direction=firestore.Query.DESCENDING,
-            )
-            .offset(offset)
-            .limit(limit)
-        )
-        return [_analysis_record(snapshot) for snapshot in query.stream()]
+        workspace_id = current_workspace_id()
+        snapshots = self._analyses.order_by(
+            "created_at", direction=firestore.Query.DESCENDING
+        ).stream()
+        visible = [
+            snapshot
+            for snapshot in snapshots
+            if (snapshot.to_dict() or {}).get("workspace_id", LOCAL_WORKSPACE_ID) == workspace_id
+        ]
+        return [_analysis_record(snapshot) for snapshot in visible[offset : offset + limit]]
 
     def get_analysis(
         self,
@@ -352,6 +359,9 @@ class FirestoreAnalysisRepository(AnalysisRepository):
     ) -> AnalysisRecord | None:
         snapshot = self._analyses.document(analysis_id).get()
         if not snapshot.exists:
+            return None
+        data = snapshot.to_dict() or {}
+        if data.get("workspace_id", LOCAL_WORKSPACE_ID) != current_workspace_id():
             return None
         return _analysis_record(snapshot)
 
@@ -587,6 +597,10 @@ class FirestoreAnalysisRepository(AnalysisRepository):
         analysis_ref = self._analyses.document(analysis_id)
         snapshot = analysis_ref.get()
         if not snapshot.exists:
+            return False
+        if (snapshot.to_dict() or {}).get(
+            "workspace_id", LOCAL_WORKSPACE_ID
+        ) != current_workspace_id():
             return False
 
         data = snapshot.to_dict() or {}

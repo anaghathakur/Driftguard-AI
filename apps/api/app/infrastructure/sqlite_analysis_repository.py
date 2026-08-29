@@ -12,6 +12,10 @@ from typing import Any
 from uuid import uuid4
 
 from apps.api.app.core.redaction import redact_secrets
+from apps.api.app.core.workspace_context import (
+    LOCAL_WORKSPACE_ID,
+    current_workspace_id,
+)
 from apps.api.app.domain.analysis import (
     AnalysisCreation,
     AnalysisKind,
@@ -40,6 +44,7 @@ from apps.api.app.schemas.validation import PatchValidationRun
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS analyses (
     analysis_id TEXT PRIMARY KEY,
+    workspace_id TEXT NOT NULL DEFAULT '00000000-0000-0000-0000-000000000001',
     kind TEXT NOT NULL CHECK (kind IN ('comparison', 'impact')),
     status TEXT NOT NULL CHECK (status IN ('running', 'succeeded', 'failed')),
     request_fingerprint TEXT NOT NULL UNIQUE CHECK (length(request_fingerprint) = 64),
@@ -294,12 +299,14 @@ class SQLiteAnalysisRepository(AnalysisRepository):
             connection.executescript(SCHEMA)
             _ensure_analysis_source_columns(connection)
             _ensure_repository_match_columns(connection)
+            _ensure_analysis_workspace_column(connection)
 
     def create_or_get(self, submission: AnalysisSubmission) -> AnalysisCreation:
+        workspace_id = current_workspace_id()
         with self._transaction() as connection:
             existing = connection.execute(
-                "SELECT * FROM analyses WHERE request_fingerprint = ?",
-                (submission.request_fingerprint,),
+                "SELECT * FROM analyses WHERE request_fingerprint = ? AND workspace_id = ?",
+                (submission.request_fingerprint, workspace_id),
             ).fetchone()
             if existing is not None:
                 return AnalysisCreation(analysis=_analysis_record(existing), duplicate=True)
@@ -309,16 +316,17 @@ class SQLiteAnalysisRepository(AnalysisRepository):
             connection.execute(
                 """
                 INSERT INTO analyses (
-                    analysis_id, kind, status, request_fingerprint,
+                    analysis_id, workspace_id, kind, status, request_fingerprint,
                     old_filename, new_filename, repository_filename,
                     old_file_sha256, new_file_sha256, repository_file_sha256,
                     repository_source_type, repository_url, repository_ref,
                     repository_commit_sha,
                     created_at, updated_at
-                ) VALUES (?, ?, 'running', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, 'running', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     analysis_id,
+                    workspace_id,
                     submission.kind.value,
                     submission.request_fingerprint,
                     submission.old_filename,
@@ -340,7 +348,8 @@ class SQLiteAnalysisRepository(AnalysisRepository):
                 ),
             )
             created = connection.execute(
-                "SELECT * FROM analyses WHERE analysis_id = ?", (analysis_id,)
+                "SELECT * FROM analyses WHERE analysis_id = ? AND workspace_id = ?",
+                (analysis_id, workspace_id),
             ).fetchone()
             return AnalysisCreation(analysis=_analysis_record(created), duplicate=False)
 
@@ -618,18 +627,19 @@ class SQLiteAnalysisRepository(AnalysisRepository):
         with self._connect() as connection:
             rows = connection.execute(
                 """
-                SELECT * FROM analyses
+                SELECT * FROM analyses WHERE workspace_id = ?
                 ORDER BY created_at DESC, analysis_id DESC
                 LIMIT ? OFFSET ?
                 """,
-                (limit, offset),
+                (current_workspace_id(), limit, offset),
             ).fetchall()
         return [_analysis_record(row) for row in rows]
 
     def get_analysis(self, analysis_id: str) -> AnalysisRecord | None:
         with self._connect() as connection:
             row = connection.execute(
-                "SELECT * FROM analyses WHERE analysis_id = ?", (analysis_id,)
+                "SELECT * FROM analyses WHERE analysis_id = ? AND workspace_id = ?",
+                (analysis_id, current_workspace_id()),
             ).fetchone()
         return _analysis_record(row) if row is not None else None
 
@@ -1012,7 +1022,8 @@ class SQLiteAnalysisRepository(AnalysisRepository):
     def delete(self, analysis_id: str) -> bool:
         with self._transaction() as connection:
             cursor = connection.execute(
-                "DELETE FROM analyses WHERE analysis_id = ?", (analysis_id,)
+                "DELETE FROM analyses WHERE analysis_id = ? AND workspace_id = ?",
+                (analysis_id, current_workspace_id()),
             )
             return cursor.rowcount > 0
 
@@ -1161,6 +1172,23 @@ def _ensure_analysis_source_columns(connection: sqlite3.Connection) -> None:
     for name, definition in additions.items():
         if name not in columns:
             connection.execute(f"ALTER TABLE analyses ADD COLUMN {name} {definition}")
+
+
+def _ensure_analysis_workspace_column(connection: sqlite3.Connection) -> None:
+    columns = {row[1] for row in connection.execute("PRAGMA table_info(analyses)")}
+    if "workspace_id" not in columns:
+        connection.execute(
+            "ALTER TABLE analyses ADD COLUMN workspace_id TEXT NOT NULL "
+            f"DEFAULT '{LOCAL_WORKSPACE_ID}'"
+        )
+    connection.execute(
+        "UPDATE analyses SET workspace_id = ? WHERE workspace_id IS NULL OR workspace_id = ''",
+        (LOCAL_WORKSPACE_ID,),
+    )
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS idx_analyses_workspace_created "
+        "ON analyses(workspace_id, created_at DESC)"
+    )
 
 
 def _ensure_repository_match_columns(connection: sqlite3.Connection) -> None:

@@ -70,9 +70,7 @@ class PatchProposalService:
                 status_code=422,
             )
         direct_files = {match.file_path for match in matches if match.impact_depth == 0}
-        allowed_files = tuple(
-            sorted(direct_files or {match.file_path for match in matches})
-        )
+        allowed_files = tuple(sorted(direct_files or {match.file_path for match in matches}))
         if not allowed_files:
             raise DriftGuardError(
                 code="patch_generation_failed",

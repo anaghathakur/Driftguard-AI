@@ -82,12 +82,8 @@ def train_models(
         predicted = candidate.predict(x_test)
         metrics[name] = {
             "accuracy": round(float(accuracy_score(y_test, predicted)), 6),
-            "balanced_accuracy": round(
-                float(balanced_accuracy_score(y_test, predicted)), 6
-            ),
-            "macro_f1": round(
-                float(f1_score(y_test, predicted, average="macro")), 6
-            ),
+            "balanced_accuracy": round(float(balanced_accuracy_score(y_test, predicted)), 6),
+            "macro_f1": round(float(f1_score(y_test, predicted, average="macro")), 6),
         }
         trained[name] = candidate
 
@@ -124,8 +120,7 @@ def train_models(
             "seed": seed,
             "sha256": dataset.sha256,
             "class_distribution": {
-                label: int((dataset.labels == label).sum())
-                for label in sorted(set(dataset.labels))
+                label: int((dataset.labels == label).sum()) for label in sorted(set(dataset.labels))
             },
         },
         "split": {"test_fraction": 0.25, "random_state": seed, "stratified": True},

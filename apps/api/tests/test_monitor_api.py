@@ -173,10 +173,7 @@ def test_monitor_api_changed_check_runs_existing_impact_pipeline(
     assert detail["baseline_sha256"] == remote_spec(currency_required=True).sha256
     assert detail["last_successful_analysis_id"] == result["analysis_id"]
     assert len(client.get(f"/api/v1/analyses/{result['analysis_id']}/risks").json()) == 1
-    assert (
-        len(client.get(f"/api/v1/analyses/{result['analysis_id']}/migrations").json())
-        == 1
-    )
+    assert len(client.get(f"/api/v1/analyses/{result['analysis_id']}/migrations").json()) == 1
 
 
 def test_monitor_api_rejects_empty_update_and_missing_monitor(

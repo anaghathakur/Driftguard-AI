@@ -44,9 +44,7 @@ def test_matches_operation_id_even_without_literal_path(base_spec, clone):
     assert impacts[0].matches[0].evidence == "sdk.createPayment(payload)"
 
 
-def test_matches_templated_path_and_returns_empty_result_for_unrelated_file(
-    base_spec, clone
-):
+def test_matches_templated_path_and_returns_empty_result_for_unrelated_file(base_spec, clone):
     operation = base_spec["paths"].pop("/payments")
     base_spec["paths"]["/payments/{payment_id}"] = operation
     new = clone(base_spec)

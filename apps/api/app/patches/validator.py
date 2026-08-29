@@ -141,12 +141,7 @@ def validate_patch(
 
 
 def _validated_patch_path(path: str) -> str:
-    if (
-        not path
-        or "\\" in path
-        or path.startswith(("/", "//"))
-        or re.match(r"^[A-Za-z]:", path)
-    ):
+    if not path or "\\" in path or path.startswith(("/", "//")) or re.match(r"^[A-Za-z]:", path):
         _unsafe_path()
     parts = PurePosixPath(path).parts
     if not parts or any(part in {"", ".", ".."} for part in parts):

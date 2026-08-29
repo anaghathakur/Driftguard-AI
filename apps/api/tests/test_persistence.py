@@ -23,9 +23,7 @@ def test_database_initializes_all_milestone_tables(analysis_repository):
     try:
         tables = {
             row[0]
-            for row in connection.execute(
-                "SELECT name FROM sqlite_master WHERE type = 'table'"
-            )
+            for row in connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
         }
     finally:
         connection.close()
@@ -40,9 +38,7 @@ def test_database_initializes_all_milestone_tables(analysis_repository):
     } <= tables
 
 
-def test_duplicate_comparison_reuses_persisted_analysis(
-    analysis_repository, base_spec, clone
-):
+def test_duplicate_comparison_reuses_persisted_analysis(analysis_repository, base_spec, clone):
     new = clone(base_spec)
     new["paths"]["/payments"]["post"]["parameters"][0]["schema"]["type"] = "integer"
     old_content = specification_bytes(base_spec)

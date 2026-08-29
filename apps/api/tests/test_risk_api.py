@@ -43,9 +43,7 @@ def test_persisted_risk_list_detail_and_pipeline(client, base_spec, clone):
     assert risks[0]["reasons"]
     assert risks[0]["top_drivers"]
 
-    detail = client.get(
-        f"/api/v1/analyses/{analysis_id}/risks/{changes[0]['change_id']}"
-    )
+    detail = client.get(f"/api/v1/analyses/{analysis_id}/risks/{changes[0]['change_id']}")
     assert detail.status_code == 200
     assert detail.json() == risks[0]
     pipeline = client.get(f"/api/v1/analyses/{analysis_id}/pipeline").json()

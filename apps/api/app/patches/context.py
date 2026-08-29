@@ -98,9 +98,7 @@ def build_patch_prompt(
 
     payload = {
         "task": "Propose minimal structured source edits for human review.",
-        "contract_changes": [
-            change.model_dump(mode="json") for change in context.changes
-        ],
+        "contract_changes": [change.model_dump(mode="json") for change in context.changes],
         "migration_recommendations": [
             {
                 "change_id": item.change_id,

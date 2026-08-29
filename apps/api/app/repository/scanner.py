@@ -12,6 +12,7 @@ from zipfile import BadZipFile, LargeZipFile, ZipFile, ZipInfo
 from apps.api.app.core.config import settings
 from apps.api.app.core.exceptions import DriftGuardError
 from apps.api.app.domain.repository import RepositoryScan, ScannedSourceFile
+from apps.api.app.repository.policy import RepositoryFilteringPolicy
 
 SOURCE_EXTENSIONS = frozenset(
     {
@@ -40,24 +41,6 @@ SOURCE_EXTENSIONS = frozenset(
         ".vue",
     }
 )
-IGNORED_DIRECTORIES = frozenset(
-    {
-        ".git",
-        ".hg",
-        ".mypy_cache",
-        ".pytest_cache",
-        ".ruff_cache",
-        ".svn",
-        ".venv",
-        "build",
-        "coverage",
-        "dist",
-        "node_modules",
-        "target",
-        "vendor",
-        "venv",
-    }
-)
 
 
 class RepositoryArchiveScanner:
@@ -69,12 +52,17 @@ class RepositoryArchiveScanner:
         max_file_bytes: int = settings.max_repository_file_bytes,
         max_uncompressed_bytes: int = settings.max_repository_uncompressed_bytes,
         max_compression_ratio: int = settings.max_repository_compression_ratio,
+        max_source_files: int = settings.max_repository_source_files,
+        max_source_bytes: int = settings.max_repository_source_bytes,
     ) -> None:
         self.max_archive_bytes = max_archive_bytes
         self.max_files = max_files
         self.max_file_bytes = max_file_bytes
         self.max_uncompressed_bytes = max_uncompressed_bytes
         self.max_compression_ratio = max_compression_ratio
+        self.max_source_files = max_source_files
+        self.max_source_bytes = max_source_bytes
+        self.policy = RepositoryFilteringPolicy(SOURCE_EXTENSIONS)
 
     def scan(self, filename: str, content: bytes) -> RepositoryScan:
         if len(content) > self.max_archive_bytes:
@@ -96,9 +84,15 @@ class RepositoryArchiveScanner:
     def _scan_archive(self, archive: ZipFile, content: bytes) -> RepositoryScan:
         entries = archive.infolist()
         if len(entries) > self.max_files:
-            self._limit_error("archive_entries", self.max_files)
+            raise DriftGuardError(
+                code="repository_file_limit_exceeded",
+                message="Repository tree exceeds the configured entry limit.",
+                status_code=413,
+                details={"limit": "archive_entries", "maximum": self.max_files},
+            )
 
         total_size = 0
+        source_bytes = 0
         seen_paths: set[str] = set()
         source_files: list[ScannedSourceFile] = []
         skipped: Counter[str] = Counter()
@@ -112,7 +106,6 @@ class RepositoryArchiveScanner:
                     message="The repository ZIP contains duplicate file paths.",
                 )
             seen_paths.add(path_key)
-
             if entry.is_dir():
                 continue
             _validate_entry_type(entry)
@@ -125,17 +118,19 @@ class RepositoryArchiveScanner:
             total_size += entry.file_size
             if total_size > self.max_uncompressed_bytes:
                 self._limit_error("uncompressed_bytes", self.max_uncompressed_bytes)
-            if entry.file_size > self.max_file_bytes:
-                skipped["file_too_large"] += 1
-                continue
             if entry.file_size > self.max_compression_ratio * max(entry.compress_size, 1):
                 self._limit_error("compression_ratio", self.max_compression_ratio)
-            if _is_ignored(path):
-                skipped["ignored_path"] += 1
+            skip_reason = self.policy.reason_to_skip(path)
+            if skip_reason:
+                skipped[skip_reason] += 1
                 continue
-            if PurePosixPath(path).suffix.lower() not in SOURCE_EXTENSIONS:
-                skipped["unsupported_extension"] += 1
-                continue
+            if entry.file_size > self.max_file_bytes:
+                raise DriftGuardError(
+                    code="repository_too_large",
+                    message="A source file exceeds the per-file analysis limit.",
+                    status_code=413,
+                    details={"limit": "source_file_bytes", "maximum": self.max_file_bytes},
+                )
 
             raw = archive.read(entry)
             if len(raw) > self.max_file_bytes:
@@ -149,6 +144,21 @@ class RepositoryArchiveScanner:
                 skipped["non_utf8_file"] += 1
                 continue
             source_files.append(ScannedSourceFile(path=path, content=text, size_bytes=len(raw)))
+            source_bytes += len(raw)
+            if len(source_files) > self.max_source_files:
+                raise DriftGuardError(
+                    code="repository_source_limit_exceeded",
+                    message="Repository contains too many source files to analyze safely.",
+                    status_code=413,
+                    details={"limit": "source_files", "maximum": self.max_source_files},
+                )
+            if source_bytes > self.max_source_bytes:
+                raise DriftGuardError(
+                    code="repository_source_limit_exceeded",
+                    message="Repository source content exceeds the aggregate analysis limit.",
+                    status_code=413,
+                    details={"limit": "source_bytes", "maximum": self.max_source_bytes},
+                )
 
         return RepositoryScan(
             archive_sha256=hashlib.sha256(content).hexdigest(),
@@ -195,7 +205,3 @@ def _unsafe_path() -> None:
         code="unsafe_repository_archive",
         message="The repository ZIP contains an unsafe file path.",
     )
-
-
-def _is_ignored(path: str) -> bool:
-    return any(part.casefold() in IGNORED_DIRECTORIES for part in PurePosixPath(path).parts)

@@ -32,29 +32,23 @@ _REDACTION_RULES: tuple[tuple[re.Pattern[str], str], ...] = (
     ),
     (
         re.compile(
-            
-                r"(?i)([\"'])"
-                r"(api[_-]?key|secret|password|passwd|token|connection[_-]?string)"
-                r"\1(\s*:\s*)([\"'])([^\"'\r\n]{4,})\4"
-            
+            r"(?i)([\"'])"
+            r"(api[_-]?key|secret|password|passwd|token|connection[_-]?string)"
+            r"\1(\s*:\s*)([\"'])([^\"'\r\n]{4,})\4"
         ),
         r"\1\2\1\3\4[REDACTED]\4",
     ),
     (
         re.compile(
-            
-                r"(?i)\b"
-                r"(api[_-]?key|secret|password|passwd|token|connection[_-]?string)"
-                r"\b(\s*[:=]\s*)"
-                r"([\"'][^\"'\r\n]{4,}[\"']|[^\s,;]{8,})"
-            
+            r"(?i)\b"
+            r"(api[_-]?key|secret|password|passwd|token|connection[_-]?string)"
+            r"\b(\s*[:=]\s*)"
+            r"([\"'][^\"'\r\n]{4,}[\"']|[^\s,;]{8,})"
         ),
         r"\1\2[REDACTED]",
     ),
     (
-        re.compile(
-            r"(?i)\b(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?|redis)://[^\s\"']+"
-        ),
+        re.compile(r"(?i)\b(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?|redis)://[^\s\"']+"),
         "[REDACTED_CONNECTION_STRING]",
     ),
 )

@@ -12,6 +12,10 @@ from time import perf_counter
 from typing import TypeVar
 
 from apps.api.app.core.exceptions import DriftGuardError
+from apps.api.app.core.workspace_context import (
+    LOCAL_WORKSPACE_ID,
+    current_workspace_id,
+)
 from apps.api.app.domain.analysis import (
     AnalysisKind,
     AnalysisRecord,
@@ -578,6 +582,8 @@ def _submission(
     repository_hash = (
         hashlib.sha256(repository_content).hexdigest() if repository_content is not None else None
     )
+    workspace_id = current_workspace_id()
+    workspace_fingerprint = workspace_id if workspace_id != LOCAL_WORKSPACE_ID else None
     fingerprint_source = json.dumps(
         {
             "pipeline_version": ANALYSIS_PIPELINE_VERSION,
@@ -591,6 +597,7 @@ def _submission(
             "repository_url": repository_url,
             "repository_ref": repository_ref,
             "repository_commit_sha": repository_commit_sha,
+            **({"workspace_id": workspace_fingerprint} if workspace_fingerprint else {}),
         },
         sort_keys=True,
         separators=(",", ":"),

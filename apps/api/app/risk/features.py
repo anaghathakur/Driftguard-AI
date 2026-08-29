@@ -71,25 +71,17 @@ def generate_features(
     subject_depth = (change.subject or "").count(".")
     values = {
         "is_breaking": float(change.breaking),
-        "is_potentially_breaking": float(
-            change.category == ChangeCategory.POTENTIALLY_BREAKING
-        ),
+        "is_potentially_breaking": float(change.category == ChangeCategory.POTENTIALLY_BREAKING),
         "severity_score": _SEVERITY_SCORE[change.severity],
         "is_endpoint_removed": float(change.change_type == ChangeType.ENDPOINT_REMOVED),
         "is_method_removed": float(change.change_type == ChangeType.HTTP_METHOD_REMOVED),
         "is_auth_change": float(change.change_type in _AUTH_CHANGES),
         "is_required_input_added": float(change.change_type in _REQUIRED_INPUT),
-        "is_input_removed_or_renamed": float(
-            change.change_type in _INPUT_REMOVED_OR_RENAMED
-        ),
+        "is_input_removed_or_renamed": float(change.change_type in _INPUT_REMOVED_OR_RENAMED),
         "is_type_change": float(change.change_type in _TYPE_CHANGES),
         "is_response_removed": float(change.change_type in _RESPONSE_REMOVED),
-        "is_enum_value_removed": float(
-            change.change_type == ChangeType.ENUM_VALUE_REMOVED
-        ),
-        "is_non_breaking_addition": float(
-            change.change_type in _NON_BREAKING_ADDITIONS
-        ),
+        "is_enum_value_removed": float(change.change_type == ChangeType.ENUM_VALUE_REMOVED),
+        "is_non_breaking_addition": float(change.change_type in _NON_BREAKING_ADDITIONS),
         "match_count_norm": min(match_count, 10) / 10,
         "impacted_files_norm": min(len(impacted_files), 5) / 5,
         "high_confidence_ratio": high_confidence / match_count if match_count else 0.0,

@@ -7,6 +7,10 @@ from typing import Any
 
 from google.cloud import firestore
 
+from apps.api.app.core.workspace_context import (
+    LOCAL_WORKSPACE_ID,
+    current_workspace_id,
+)
 from apps.api.app.domain.monitor import ApiMonitor, MonitorCheckRecord, MonitorCheckStatus
 from apps.api.app.ports.monitor_repository import ApiMonitorRepository
 
@@ -43,6 +47,9 @@ class FirestoreMonitorRepository(ApiMonitorRepository):
         snapshot = self._monitors.document(monitor_id).get()
         if not snapshot.exists:
             return None
+        data = snapshot.to_dict() or {}
+        if data.get("workspace_id", LOCAL_WORKSPACE_ID) != current_workspace_id():
+            return None
         return _monitor(
             snapshot.to_dict() or {},
             _baseline_content(snapshot.reference),
@@ -53,12 +60,14 @@ class FirestoreMonitorRepository(ApiMonitorRepository):
             "created_at",
             direction=firestore.Query.DESCENDING,
         )
+        workspace_id = current_workspace_id()
         return [
             _monitor(
                 snapshot.to_dict() or {},
                 _baseline_content(snapshot.reference),
             )
             for snapshot in query.stream()
+            if (snapshot.to_dict() or {}).get("workspace_id", LOCAL_WORKSPACE_ID) == workspace_id
         ]
 
     def list_due(self, now: datetime) -> list[ApiMonitor]:
@@ -73,7 +82,12 @@ class FirestoreMonitorRepository(ApiMonitorRepository):
 
     def delete(self, monitor_id: str) -> bool:
         reference = self._monitors.document(monitor_id)
-        if not reference.get().exists:
+        snapshot = reference.get()
+        if (
+            not snapshot.exists
+            or (snapshot.to_dict() or {}).get("workspace_id", LOCAL_WORKSPACE_ID)
+            != current_workspace_id()
+        ):
             return False
         self.client.recursive_delete(reference)
         return True
@@ -110,9 +124,7 @@ class FirestoreMonitorRepository(ApiMonitorRepository):
 
     def _write_monitor(self, monitor: ApiMonitor, *, create: bool = False) -> None:
         reference = self._monitors.document(monitor.monitor_id)
-        existing_chunks = (
-            [] if create else list(reference.collection(_BASELINE_CHUNKS).stream())
-        )
+        existing_chunks = [] if create else list(reference.collection(_BASELINE_CHUNKS).stream())
         batch = self.client.batch()
         if create:
             batch.create(reference, _monitor_data(monitor))
@@ -131,6 +143,7 @@ class FirestoreMonitorRepository(ApiMonitorRepository):
 def _monitor_data(monitor: ApiMonitor) -> dict[str, Any]:
     return {
         "monitor_id": monitor.monitor_id,
+        "workspace_id": current_workspace_id(),
         "name": monitor.name,
         "specification_url": monitor.specification_url,
         "repository_url": monitor.repository_url,
@@ -189,9 +202,7 @@ def _monitor(data: dict[str, Any], baseline_content: bytes) -> ApiMonitor:
         last_changed_at=_optional_datetime(data.get("last_changed_at")),
         last_successful_analysis_id=data.get("last_successful_analysis_id"),
         last_check_status=(
-            MonitorCheckStatus(data["last_check_status"])
-            if data.get("last_check_status")
-            else None
+            MonitorCheckStatus(data["last_check_status"]) if data.get("last_check_status") else None
         ),
         last_error_code=data.get("last_error_code"),
         last_error_message=data.get("last_error_message"),

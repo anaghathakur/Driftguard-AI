@@ -76,9 +76,7 @@ class ContractDiffer:
             ),
         )
 
-    def _compare_operation(
-        self, old: NormalizedOperation, new: NormalizedOperation
-    ) -> None:
+    def _compare_operation(self, old: NormalizedOperation, new: NormalizedOperation) -> None:
         starting_change_count = len(self._changes)
         self._compare_parameters(old, new)
         self._compare_fields(old, new, old.request_fields, new.request_fields, "request")
@@ -96,9 +94,7 @@ class ContractDiffer:
                 explanation="Only the operation documentation changed.",
             )
 
-    def _compare_parameters(
-        self, old: NormalizedOperation, new: NormalizedOperation
-    ) -> None:
+    def _compare_parameters(self, old: NormalizedOperation, new: NormalizedOperation) -> None:
         old_parameters = {(item.name, item.location): item for item in old.parameters}
         new_parameters = {(item.name, item.location): item for item in new.parameters}
         removed = set(old_parameters) - set(new_parameters)
@@ -304,9 +300,7 @@ class ContractDiffer:
                 )
             self._compare_enum(old_operation, new_operation, old_field, new_field, context)
 
-    def _compare_responses(
-        self, old: NormalizedOperation, new: NormalizedOperation
-    ) -> None:
+    def _compare_responses(self, old: NormalizedOperation, new: NormalizedOperation) -> None:
         old_statuses = set(old.responses)
         new_statuses = set(new.responses)
         for status in sorted(old_statuses - new_statuses):
@@ -341,9 +335,7 @@ class ContractDiffer:
                 status,
             )
 
-    def _compare_authentication(
-        self, old: NormalizedOperation, new: NormalizedOperation
-    ) -> None:
+    def _compare_authentication(self, old: NormalizedOperation, new: NormalizedOperation) -> None:
         if old.authentication == new.authentication:
             return
         added = not old.authentication and bool(new.authentication)
@@ -434,9 +426,7 @@ def _status_suffix(status: str | None) -> str:
     return f" in response {status}" if status else ""
 
 
-def _parameters_look_renamed(
-    old: NormalizedParameter, new: NormalizedParameter
-) -> bool:
+def _parameters_look_renamed(old: NormalizedParameter, new: NormalizedParameter) -> bool:
     return (
         old.name != new.name
         and old.location == new.location

@@ -1,0 +1,65 @@
+.analysis-layout { display: grid; grid-template-columns: minmax(0, 1fr) 330px; gap: 16px; align-items: start; }
+.analysis-form-stack { display: flex; min-width: 0; flex-direction: column; gap: 14px; }
+.analysis-section { padding: 20px; }
+.analysis-section-heading { display: flex; align-items: flex-start; gap: 11px; margin-bottom: 18px; }
+.analysis-section-heading > span { display: grid; width: 22px; height: 22px; flex: none; place-items: center; border: 1px solid rgba(106,213,234,.25); border-radius: 50%; color: var(--cyan); font-size: 10px; font-weight: 700; }
+.analysis-section-heading h2 { margin: 0; color: var(--text); font-size: 14px; font-weight: 650; }
+.analysis-section-heading p { margin: 4px 0 0; color: var(--text-subtle); font-size: 11px; }
+.contract-grid { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 12px; }
+.file-upload { position: relative; display: flex; min-height: 150px; flex-direction: column; align-items: center; justify-content: center; border: 1px dashed var(--border-strong); border-radius: var(--radius); background: var(--surface-lowest); padding: 18px; text-align: center; transition: border-color .15s ease, background .15s ease; }
+.file-upload:hover { border-color: rgba(106,213,234,.45); background: rgba(106,213,234,.025); }
+.file-upload.has-file { border-style: solid; border-color: rgba(123,219,128,.25); background: rgba(123,219,128,.035); }
+.file-upload input { position: absolute; width: 1px; height: 1px; opacity: 0; }
+.file-upload-icon { display: grid; width: 30px; height: 30px; place-items: center; margin-bottom: 10px; border-radius: 50%; background: rgba(106,213,234,.09); color: var(--cyan); font-size: 15px; }
+.file-upload.has-file .file-upload-icon { background: rgba(123,219,128,.1); color: var(--green); }
+.file-upload strong { color: var(--text); font-size: 12px; }
+.file-upload > span:not(.file-upload-icon) { display: block; max-width: 100%; margin-top: 5px; overflow: hidden; color: var(--text-muted); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.file-upload small { margin-top: 10px; color: var(--cyan); font-size: 10px; font-weight: 650; }
+.file-upload-compact { min-height: 112px; margin-top: 14px; }
+.segmented-control { display: grid; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-lowest); padding: 3px; }
+.repository-mode-control { grid-template-columns: repeat(3, minmax(0,1fr)); }
+.segmented-control button { min-height: 34px; border: 0; border-radius: 3px; background: transparent; padding: 7px 10px; color: var(--text-muted); font-size: 11px; font-weight: 600; }
+.segmented-control button:hover { color: var(--text); }
+.segmented-control button.is-active { background: var(--surface-high); color: var(--cyan); box-shadow: inset 0 0 0 1px rgba(106,213,234,.12); }
+.segmented-control button:disabled { opacity: .55; }
+.repository-empty { margin-top: 14px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-lowest); padding: 13px; color: var(--text-muted); font-size: 11px; line-height: 1.6; }
+.repository-fields { display: grid; grid-template-columns: minmax(0,1.5fr) minmax(0,1fr); gap: 12px; margin-top: 14px; }
+.text-field { display: block; }
+.text-field > span { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.text-field strong { color: var(--text); font-size: 11px; }
+.text-field em { color: var(--cyan); font-size: 9px; font-style: normal; text-transform: uppercase; }
+.text-field small { display: block; min-height: 30px; margin-top: 3px; color: var(--text-subtle); font-size: 9px; line-height: 1.5; }
+.text-field input { width: 100%; min-height: 38px; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); background: var(--surface-lowest); padding: 9px 11px; color: var(--text); font-size: 11px; }
+.text-field input::placeholder { color: #566165; }
+.text-field input:focus { border-color: rgba(106,213,234,.45); }
+.security-note { display: flex; align-items: center; gap: 7px; margin: 14px 0 0; color: var(--text-subtle); font-size: 10px; }
+.security-note span { color: var(--green); }
+.analysis-error { margin: 0; }
+.analysis-submit-row { display: flex; align-items: center; justify-content: space-between; gap: 18px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface-low); padding: 13px 14px; }
+.analysis-submit-row p { margin: 0; color: var(--text-muted); font-size: 11px; }
+.analysis-submit { min-width: 150px; }
+.pipeline-panel { position: sticky; top: 30px; overflow: hidden; }
+.pipeline-title-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.pipeline-state { display: inline-flex; align-items: center; gap: 6px; color: var(--green); font-size: 9px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; }
+.pipeline-state::before { width: 6px; height: 6px; border-radius: 50%; background: currentColor; content: ""; }
+.pipeline-state.is-processing { color: var(--cyan); }
+.pipeline-list { margin: 0; padding: 8px 0; list-style: none; }
+.pipeline-list li { display: grid; grid-template-columns: 24px minmax(0,1fr) auto; align-items: center; gap: 10px; padding: 11px 14px; }
+.pipeline-list li.is-skipped { opacity: .5; }
+.pipeline-marker { display: grid; width: 21px; height: 21px; place-items: center; border: 1px solid var(--border-strong); border-radius: 50%; color: var(--text-muted); font-size: 9px; }
+.pipeline-list strong, .pipeline-list small { display: block; }
+.pipeline-list strong { color: var(--text); font-size: 10px; }
+.pipeline-list small { margin-top: 3px; color: var(--text-subtle); font-size: 8px; line-height: 1.4; }
+.pipeline-list em { color: var(--text-subtle); font-size: 8px; font-style: normal; text-transform: uppercase; }
+
+@media (max-width: 1080px) {
+  .analysis-layout { grid-template-columns: 1fr; }
+  .pipeline-panel { position: static; }
+}
+@media (max-width: 650px) {
+  .analysis-section { padding: 16px; }
+  .contract-grid, .repository-fields { grid-template-columns: 1fr; }
+  .repository-mode-control { grid-template-columns: 1fr; }
+  .analysis-submit-row { align-items: stretch; flex-direction: column; }
+  .analysis-submit { width: 100%; }
+}

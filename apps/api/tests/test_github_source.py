@@ -42,9 +42,7 @@ def fetch(
 
 def test_parse_github_repository_url_accepts_public_repository_and_git_suffix():
     plain = parse_github_repository_url("https://github.com/example/repository")
-    suffixed = parse_github_repository_url(
-        "https://github.com/example/repository.git/"
-    )
+    suffixed = parse_github_repository_url("https://github.com/example/repository.git/")
 
     assert (plain.owner, plain.repository) == ("example", "repository")
     assert suffixed == plain
@@ -140,9 +138,7 @@ def test_fetch_uses_the_repository_default_branch_when_ref_is_omitted():
             return httpx.Response(
                 302,
                 headers={
-                    "location": (
-                        "https://codeload.github.com/example/repository/archive.zip"
-                    )
+                    "location": ("https://codeload.github.com/example/repository/archive.zip")
                 },
             )
         return httpx.Response(200, content=content)
@@ -232,9 +228,7 @@ def test_fetch_maps_codeload_404_after_redirect(
             return httpx.Response(
                 302,
                 headers={
-                    "location": (
-                        "https://codeload.github.com/example/repository/archive.zip"
-                    )
+                    "location": ("https://codeload.github.com/example/repository/archive.zip")
                 },
             )
         return httpx.Response(repository_status)
@@ -252,9 +246,7 @@ def test_fetch_keeps_genuine_codeload_failure_as_upstream_error():
             return httpx.Response(
                 302,
                 headers={
-                    "location": (
-                        "https://codeload.github.com/example/repository/archive.zip"
-                    )
+                    "location": ("https://codeload.github.com/example/repository/archive.zip")
                 },
             )
         return httpx.Response(500)
@@ -296,9 +288,7 @@ def test_fetch_rejects_oversized_content_length_before_reading():
             return httpx.Response(
                 302,
                 headers={
-                    "location": (
-                        "https://codeload.github.com/example/repository/archive.zip"
-                    )
+                    "location": ("https://codeload.github.com/example/repository/archive.zip")
                 },
             )
         return httpx.Response(
@@ -324,9 +314,7 @@ def test_fetch_rejects_oversized_stream_without_content_length():
             return httpx.Response(
                 302,
                 headers={
-                    "location": (
-                        "https://codeload.github.com/example/repository/archive.zip"
-                    )
+                    "location": ("https://codeload.github.com/example/repository/archive.zip")
                 },
             )
         return httpx.Response(200, stream=ChunkStream())
@@ -343,9 +331,7 @@ def test_fetch_rejects_an_unreadable_zip_response():
             return httpx.Response(
                 302,
                 headers={
-                    "location": (
-                        "https://codeload.github.com/example/repository/archive.zip"
-                    )
+                    "location": ("https://codeload.github.com/example/repository/archive.zip")
                 },
             )
         return httpx.Response(200, content=b"PK-not-a-valid-zip")

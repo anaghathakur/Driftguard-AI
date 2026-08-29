@@ -446,9 +446,7 @@ def test_deep_matches_persist_and_render_in_json_pdf_and_monitoring(
         path=change.path,
         method=change.method,
         matches=[
-            ImpactMatch.model_validate(
-                match.model_dump(exclude={"change_id"})
-            )
+            ImpactMatch.model_validate(match.model_dump(exclude={"change_id"}))
             for match in stored_matches
         ],
     )
@@ -464,9 +462,7 @@ def test_deep_matches_persist_and_render_in_json_pdf_and_monitoring(
     )
     included = prompt["repository_impact"]["included_matches"]
     assert included[2]["impact_depth"] == 2
-    assert included[2]["impact_trace"][-1]["symbol"].endswith(
-        "orders.submit_order"
-    )
+    assert included[2]["impact_trace"][-1]["symbol"].endswith("orders.submit_order")
 
 
 def test_sqlite_additively_migrates_historical_match_rows(analysis_repository):
@@ -504,10 +500,7 @@ def test_sqlite_additively_migrates_historical_match_rows(analysis_repository):
         repository = SQLiteAnalysisRepository(database_path)
         repository.initialize()
         connection = sqlite3.connect(database_path)
-        columns = {
-            row[1]
-            for row in connection.execute("PRAGMA table_info(repository_matches)")
-        }
+        columns = {row[1] for row in connection.execute("PRAGMA table_info(repository_matches)")}
         connection.close()
         assert {
             "symbol",
@@ -617,9 +610,7 @@ def test_firestore_round_trips_deep_match_fields(base_spec, clone):
         completed_at=datetime.now(UTC),
         duration_ms=1,
     )
-    match_data = next(
-        data for reference, data in repository.writes if "matches" in reference.path
-    )
+    match_data = next(data for reference, data in repository.writes if "matches" in reference.path)
     assert match_data["symbol"] == "payments.create_payment"
     assert match_data["analysis_kind"] == "direct"
     assert match_data["trace"][0]["relation"] == "direct_api_usage"

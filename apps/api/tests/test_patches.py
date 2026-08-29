@@ -79,7 +79,7 @@ PYTHON_FILES = {
         '        "amount": amount,\n'
         '        "email": email,\n'
         "    }\n"
-        "    return requests.post(f\"{base_url}/payments\", json=payload)\n"
+        '    return requests.post(f"{base_url}/payments", json=payload)\n'
     ),
     "demo/checkout.py": (
         "from .payment_client import create_payment\n\n"
@@ -87,9 +87,7 @@ PYTHON_FILES = {
         "    return create_payment(order.base_url, order.amount, order.email)\n"
     ),
     "demo/order_service.py": (
-        "from .checkout import checkout\n\n"
-        "def submit_order(order):\n"
-        "    return checkout(order)\n"
+        "from .checkout import checkout\n\ndef submit_order(order):\n    return checkout(order)\n"
     ),
 }
 
@@ -158,18 +156,12 @@ def test_python_patch_api_snapshot_idempotency_persistence_reports_and_delete(
     assert proposal["status"] == "validated"
     assert proposal["files_changed"] == 1
     assert proposal["edit_count"] == 2
-    assert [item["file_path"] for item in proposal["files"]] == [
-        "demo/payment_client.py"
-    ]
+    assert [item["file_path"] for item in proposal["files"]] == ["demo/payment_client.py"]
     assert "demo/checkout.py" not in proposal["unified_diff"]
     assert "demo/order_service.py" not in proposal["unified_diff"]
     assert '"email": email,' in proposal["unified_diff"]
     assert '"customer_id": customer_id,' in proposal["unified_diff"]
-    assert all(
-        value is True
-        for key, value in proposal["validation"].items()
-        if key != "warnings"
-    )
+    assert all(value is True for key, value in proposal["validation"].items() if key != "warnings")
 
     repeated = client.post(
         f"/api/v1/analyses/{analysis_id}/patches",
@@ -177,9 +169,7 @@ def test_python_patch_api_snapshot_idempotency_persistence_reports_and_delete(
     ).json()
     assert repeated["patch_id"] == proposal["patch_id"]
     assert len(client.get(f"/api/v1/analyses/{analysis_id}/patches").json()) == 1
-    detail = client.get(
-        f"/api/v1/analyses/{analysis_id}/patches/{proposal['patch_id']}"
-    ).json()
+    detail = client.get(f"/api/v1/analyses/{analysis_id}/patches/{proposal['patch_id']}").json()
     assert detail["unified_diff"] == proposal["unified_diff"]
 
     report = client.get(f"/api/v1/analyses/{analysis_id}/report")
@@ -231,7 +221,7 @@ def test_mock_patch_supports_required_field_addition(client, base_spec, clone):
             "    payload = {\n"
             '        "amount": amount,\n'
             "    }\n"
-            "    return requests.post(f\"{base_url}/payments\", json=payload)\n"
+            '    return requests.post(f"{base_url}/payments", json=payload)\n'
         )
     }
     analysis_id = create_zip_analysis(client, old, new, files)
@@ -275,9 +265,7 @@ class FakeGitHubSource:
         )
 
 
-def test_github_patch_refetches_and_verifies_snapshot(
-    client, base_spec, clone
-):
+def test_github_patch_refetches_and_verifies_snapshot(client, base_spec, clone):
     old, new = patch_specs(base_spec, clone)
     github = FakeGitHubSource(archive_bytes(PYTHON_FILES))
     from apps.api.app.main import app
@@ -510,9 +498,7 @@ def test_context_is_bounded_redacted_and_keeps_hostile_comments_as_data(
         risks=tuple(analysis_repository.get_risk_predictions(analysis_id)),
         source_files=scan.files,
         allowed_files=tuple(
-            sorted(
-                {item.path for item in scan.files if "payment_client" in item.path}
-            )
+            sorted({item.path for item in scan.files if "payment_client" in item.path})
         ),
     )
     prompt = build_patch_prompt(context, max_context_bytes=20_000)
@@ -529,11 +515,7 @@ def test_gemini_provider_validates_structured_output():
     generated = generated_edit("src/client.py", "value = 1", "value = 2")
 
     def sender(_url, _headers, _payload, _timeout):
-        return {
-            "candidates": [
-                {"content": {"parts": [{"text": generated.model_dump_json()}]}}
-            ]
-        }
+        return {"candidates": [{"content": {"parts": [{"text": generated.model_dump_json()}]}}]}
 
     provider = GeminiPatchGenerationProvider(
         api_key="test-key",

@@ -145,9 +145,7 @@ def get_analysis_migrations(
     analysis_id: str,
     service: AnalysisService,
 ) -> list[MigrationRecommendation]:
-    return service.get_migration_recommendations(
-        analysis_id
-    )
+    return service.get_migration_recommendations(analysis_id)
 
 
 @router.get(
@@ -196,11 +194,7 @@ def get_analysis_pdf_report(
     return Response(
         content=pdf_bytes,
         media_type="application/pdf",
-        headers={
-            "Content-Disposition": (
-                f'attachment; filename="{filename}"'
-            )
-        },
+        headers={"Content-Disposition": (f'attachment; filename="{filename}"')},
     )
 
 
@@ -214,6 +208,4 @@ def delete_analysis(
 ) -> Response:
     service.delete(analysis_id)
 
-    return Response(
-        status_code=status.HTTP_204_NO_CONTENT
-    )
+    return Response(status_code=status.HTTP_204_NO_CONTENT)

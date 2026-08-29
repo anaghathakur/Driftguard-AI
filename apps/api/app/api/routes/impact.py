@@ -9,10 +9,15 @@ from fastapi import APIRouter, Depends, File, Form, UploadFile
 from apps.api.app.core.config import settings
 from apps.api.app.core.dependencies import (
     get_analysis_pipeline_service,
+    get_github_installation_provider,
+    get_github_onboarding_service,
     get_github_repository_source,
 )
 from apps.api.app.core.exceptions import DriftGuardError
+from apps.api.app.core.workspace_context import current_principal
 from apps.api.app.domain.analysis import RepositorySourceType
+from apps.api.app.github.installations import GitHubInstallationProvider
+from apps.api.app.github.service import GitHubOnboardingService
 from apps.api.app.repository.github_source import (
     GitHubRepositorySource,
 )
@@ -111,3 +116,61 @@ async def analyze_github_impact(
         repository_ref=archive.ref,
         repository_commit_sha=archive.commit_sha,
     )
+
+
+@router.post("/analyze/connected", response_model=ImpactAnalysisResponse)
+async def analyze_connected_impact(
+    old_spec: Annotated[UploadFile, File()],
+    new_spec: Annotated[UploadFile, File()],
+    repository_id: Annotated[str, Form()],
+    service: Annotated[
+        AnalysisPipelineService,
+        Depends(get_analysis_pipeline_service),
+    ],
+    onboarding: Annotated[
+        GitHubOnboardingService,
+        Depends(get_github_onboarding_service),
+    ],
+    provider: Annotated[
+        GitHubInstallationProvider,
+        Depends(get_github_installation_provider),
+    ],
+    ref: Annotated[str | None, Form()] = None,
+) -> ImpactAnalysisResponse:
+    principal = current_principal()
+    connection = onboarding.require_repository(principal, repository_id)
+    installation = onboarding.repository.get_installation(connection.installation_id)
+    if installation is None or installation.workspace_id != principal.workspace_id:
+        raise DriftGuardError(
+            code="github_installation_not_found",
+            message="The repository's GitHub App installation is unavailable.",
+            status_code=404,
+        )
+    old_content = await _read_specification(old_spec)
+    new_content = await _read_specification(new_spec)
+    archive = await provider.fetch_repository(
+        installation.github_installation_id,
+        connection.github_repository_id,
+        ref,
+    )
+    result = service.analyze_impact(
+        old_filename=old_spec.filename or "",
+        old_content=old_content,
+        new_filename=new_spec.filename or "",
+        new_content=new_content,
+        repository_filename=archive.filename,
+        repository_content=archive.content,
+        repository_source_type=RepositorySourceType.GITHUB,
+        repository_url=connection.html_url,
+        repository_ref=archive.ref,
+        repository_commit_sha=archive.commit_sha,
+    )
+    onboarding.auth.audit(
+        principal.workspace_id,
+        principal.user_id,
+        "analysis.created",
+        "analysis",
+        result.analysis_id,
+        {"repository_connection_id": connection.connection_id},
+    )
+    return result

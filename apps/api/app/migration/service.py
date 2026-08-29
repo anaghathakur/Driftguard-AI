@@ -60,9 +60,7 @@ class MigrationRecommendationService:
         """Return safe public provider status."""
 
         active_provider = (
-            self.provider.name
-            if self.provider.available
-            else MigrationProvider.DETERMINISTIC
+            self.provider.name if self.provider.available else MigrationProvider.DETERMINISTIC
         )
 
         return MigrationProviderStatus(
@@ -102,9 +100,7 @@ class MigrationRecommendationService:
                 ),
             )
 
-            recommendations.append(
-                self.generate(context)
-            )
+            recommendations.append(self.generate(context))
 
         return recommendations
 
@@ -116,9 +112,7 @@ class MigrationRecommendationService:
 
         prompt = build_prompt(context)
 
-        provider_warning_parts = list(
-            prompt.warnings
-        )
+        provider_warning_parts = list(prompt.warnings)
 
         provider = self.provider.name
 
@@ -135,39 +129,22 @@ class MigrationRecommendationService:
             )
 
         except Exception as exc:
-            content = deterministic_recommendation(
-                context
-            )
+            content = deterministic_recommendation(context)
 
-            recommendation_source = (
-                RecommendationSource
-                .DETERMINISTIC_FALLBACK
-            )
+            recommendation_source = RecommendationSource.DETERMINISTIC_FALLBACK
 
-            provider_warning_parts.append(
-                _safe_provider_warning(exc)
-            )
+            provider_warning_parts.append(_safe_provider_warning(exc))
 
-        safe_content, output_redactions = (
-            _sanitize_content(content)
-        )
+        safe_content, output_redactions = _sanitize_content(content)
 
-        total_redactions = (
-            prompt.redactions_applied
-            + output_redactions
-        )
+        total_redactions = prompt.redactions_applied + output_redactions
 
         if output_redactions:
             provider_warning_parts.append(
-                
-                    f"Redacted {output_redactions} potential "
-                    "secret value(s) from provider output."
-                
+                f"Redacted {output_redactions} potential secret value(s) from provider output."
             )
 
-        provider_warning = _bounded_warning(
-            provider_warning_parts
-        )
+        provider_warning = _bounded_warning(provider_warning_parts)
 
         generated_at = datetime.now(UTC)
 
@@ -233,26 +210,14 @@ def _sanitize_content(
             content.affected_code_explanation,
             1_000,
         ),
-        migration_steps=[
-            clean(item, 500)
-            for item in content.migration_steps
-        ],
-        suggested_tests=[
-            clean(item, 500)
-            for item in content.suggested_tests
-        ],
+        migration_steps=[clean(item, 500) for item in content.migration_steps],
+        suggested_tests=[clean(item, 500) for item in content.suggested_tests],
         code_example=clean(
             content.code_example,
             2_000,
         ),
-        assumptions=[
-            clean(item, 500)
-            for item in content.assumptions
-        ],
-        warnings=[
-            clean(item, 500)
-            for item in content.warnings
-        ],
+        assumptions=[clean(item, 500) for item in content.assumptions],
+        warnings=[clean(item, 500) for item in content.warnings],
         confidence=content.confidence,
     )
 
@@ -266,10 +231,7 @@ def _safe_provider_warning(
 
     exception_name = type(exc).__name__
 
-    return (
-        f"AI provider failed safely ({exception_name}); "
-        "deterministic guidance was used."
-    )
+    return f"AI provider failed safely ({exception_name}); deterministic guidance was used."
 
 
 def _bounded_warning(
@@ -277,11 +239,7 @@ def _bounded_warning(
 ) -> str | None:
     """Combine unique warnings within the persisted size limit."""
 
-    unique_parts = [
-        part.strip()
-        for part in dict.fromkeys(parts)
-        if part.strip()
-    ]
+    unique_parts = [part.strip() for part in dict.fromkeys(parts) if part.strip()]
 
     if not unique_parts:
         return None

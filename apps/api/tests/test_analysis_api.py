@@ -180,9 +180,7 @@ def test_repository_archives_and_complete_source_files_are_not_stored(
     assert response.status_code == 200
     database_bytes = analysis_repository.database_path.read_bytes()
     assert b"PRIVATE_SOURCE_SENTINEL_THAT_MUST_NOT_BE_PERSISTED" not in database_bytes
-    matches = client.get(
-        f"/api/v1/analyses/{response.json()['analysis_id']}/matches"
-    ).json()
+    matches = client.get(f"/api/v1/analyses/{response.json()['analysis_id']}/matches").json()
     assert matches[0]["evidence"] == 'requests.post("/payments", json=payload)'
 
 

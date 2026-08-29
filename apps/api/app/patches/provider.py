@@ -84,11 +84,7 @@ class MockPatchGenerationProvider(PatchGenerationProvider):
             ),
             key=lambda change: (change.path, change.method, change.subject or ""),
         )
-        direct_paths = {
-            match.file_path
-            for match in context.matches
-            if match.impact_depth == 0
-        }
+        direct_paths = {match.file_path for match in context.matches if match.impact_depth == 0}
         files: list[StructuredPatchFile] = []
         for source in sorted(context.source_files, key=lambda item: item.path):
             if source.path not in direct_paths:
@@ -142,15 +138,11 @@ class MockPatchGenerationProvider(PatchGenerationProvider):
                 )
                 break
         if not files:
-            raise PatchProviderError(
-                "No conservative request-field patch pattern was applicable."
-            )
+            raise PatchProviderError("No conservative request-field patch pattern was applicable.")
         return GeneratedPatchContent(
             summary="Update the direct API client for the changed request fields.",
             files=files,
-            warnings=[
-                "This proposed patch is static and has not been executed or tested."
-            ],
+            warnings=["This proposed patch is static and has not been executed or tested."],
         )
 
 
@@ -195,9 +187,7 @@ class GeminiPatchGenerationProvider(PatchGenerationProvider):
             raise PatchProviderError("Gemini API key is not configured.")
         payload = {
             "systemInstruction": {"parts": [{"text": prompt.system_instruction}]},
-            "contents": [
-                {"role": "user", "parts": [{"text": prompt.user_prompt}]}
-            ],
+            "contents": [{"role": "user", "parts": [{"text": prompt.user_prompt}]}],
             "generationConfig": {
                 "responseMimeType": "application/json",
                 "responseSchema": patch_content_json_schema(),
@@ -370,9 +360,7 @@ def _remove_field_edits(
     if signature:
         replacement = re.sub(rf",\s*{re.escape(identifier)}\b", "", signature, count=1)
         if replacement == signature:
-            replacement = re.sub(
-                rf"\b{re.escape(identifier)}\s*,\s*", "", signature, count=1
-            )
+            replacement = re.sub(rf"\b{re.escape(identifier)}\s*,\s*", "", signature, count=1)
         if replacement != signature:
             edits.append(_edit(signature, replacement, f"Remove '{name}' input.", change_ids))
     payload = _payload_line(source, name, identifier)
@@ -390,8 +378,9 @@ def _add_field_edits(
     identifier = name if language == "python" else _camel(name)
     signature = _first_matching_line(
         source,
-        lambda line: ("def " in line if language == "python" else "function " in line)
-        and ")" in line,
+        lambda line: (
+            ("def " in line if language == "python" else "function " in line) and ")" in line
+        ),
     )
     payload_open = _first_matching_line(
         source,
@@ -403,9 +392,7 @@ def _add_field_edits(
     closing = signature.index(")", opening)
     parameters = signature[opening + 1 : closing].strip()
     added_parameters = f"{parameters}, {identifier}" if parameters else identifier
-    signature_replacement = (
-        signature[: opening + 1] + added_parameters + signature[closing:]
-    )
+    signature_replacement = signature[: opening + 1] + added_parameters + signature[closing:]
     indentation = re.match(r"\s*", payload_open).group(0) + "    "
     value = f'"{name}": {identifier},' if language == "python" else f"{name}: {identifier},"
     payload_replacement = payload_open + indentation + value + "\n"
@@ -418,8 +405,10 @@ def _add_field_edits(
 def _signature_line(source: str, identifier: str, language: str) -> str | None:
     return _first_matching_line(
         source,
-        lambda line: ("def " in line if language == "python" else "function " in line)
-        and re.search(rf"\b{re.escape(identifier)}\b", line) is not None,
+        lambda line: (
+            ("def " in line if language == "python" else "function " in line)
+            and re.search(rf"\b{re.escape(identifier)}\b", line) is not None
+        ),
     )
 
 
@@ -428,10 +417,12 @@ def _payload_line(source: str, field: str, identifier: str) -> str | None:
     identifier_pattern = re.compile(rf"\b{re.escape(identifier)}\b")
     return _first_matching_line(
         source,
-        lambda line: re.search(field_pattern, line) is not None
-        and (
-            re.search(rf"['\"]{re.escape(field)}['\"]\s*:", line) is not None
-            or len(identifier_pattern.findall(line)) >= 2
+        lambda line: (
+            re.search(field_pattern, line) is not None
+            and (
+                re.search(rf"['\"]{re.escape(field)}['\"]\s*:", line) is not None
+                or len(identifier_pattern.findall(line)) >= 2
+            )
         ),
     )
 

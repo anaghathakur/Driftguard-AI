@@ -156,9 +156,8 @@ class OpenApiSpecificationSource:
             raise _invalid_url()
 
         normalized_host = _normalized_hostname(hostname)
-        if (
-            normalized_host in _BLOCKED_HOSTNAMES
-            or normalized_host.endswith((".localhost", ".local", ".internal"))
+        if normalized_host in _BLOCKED_HOSTNAMES or normalized_host.endswith(
+            (".localhost", ".local", ".internal")
         ):
             raise _unsafe_destination()
 

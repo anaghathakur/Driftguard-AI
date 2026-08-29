@@ -57,9 +57,7 @@ def test_rule_baseline_is_transparent_for_critical_and_low_changes(base_spec, cl
     removal_result = classify_with_rules(removal, generate_features(removal))
 
     added = clone(base_spec)
-    added["paths"]["/health"] = {
-        "get": {"responses": {"200": {"description": "ok"}}}
-    }
+    added["paths"]["/health"] = {"get": {"responses": {"200": {"description": "ok"}}}}
     addition = next(
         change
         for change in ContractDiffer().compare(
@@ -90,9 +88,7 @@ def test_synthetic_dataset_is_reproducible_and_contains_all_classes():
 def test_versioned_metadata_compares_both_candidate_models():
     metadata = json.loads((MODEL_DIRECTORY / "metadata.json").read_text(encoding="utf-8"))
     generated = generate_synthetic_dataset()
-    artifact_hash = hashlib.sha256(
-        (MODEL_DIRECTORY / "risk_model.joblib").read_bytes()
-    ).hexdigest()
+    artifact_hash = hashlib.sha256((MODEL_DIRECTORY / "risk_model.joblib").read_bytes()).hexdigest()
 
     assert metadata["model_version"] == "1.0.0"
     assert metadata["dataset"]["seed"] == 42
@@ -140,9 +136,7 @@ def test_missing_model_uses_safe_deterministic_fallback(base_spec, clone):
     assert classifier.status().available is False
 
 
-def test_checksum_mismatch_uses_fallback_without_loading_artifact(
-    tmp_path, base_spec, clone
-):
+def test_checksum_mismatch_uses_fallback_without_loading_artifact(tmp_path, base_spec, clone):
     artifact_path = tmp_path / "tampered.joblib"
     metadata_path = tmp_path / "tampered.json"
     artifact_path.write_bytes(b"untrusted bytes that must not be deserialized")

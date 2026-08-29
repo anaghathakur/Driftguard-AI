@@ -82,9 +82,7 @@ class ApiImpactMatcher:
             operation_ids = _operation_ids(change, old_contract, new_contract)
             lexical_matches: list[ImpactMatch] = []
             for source_file in repository.files:
-                lexical_matches.extend(
-                    self._match_file(change, operation_ids, source_file)
-                )
+                lexical_matches.extend(self._match_file(change, operation_ids, source_file))
                 if len(lexical_matches) >= MAX_MATCHES_PER_CHANGE:
                     break
             semantic_matches = self._semantic_matches(change, graph)
@@ -145,11 +143,7 @@ class ApiImpactMatcher:
                         file_path=caller.file_path,
                         line=edge.line,
                         column=edge.column,
-                        match_kind=(
-                            MatchKind.WRAPPER
-                            if depth == 1
-                            else MatchKind.TRANSITIVE_CALL
-                        ),
+                        match_kind=(MatchKind.WRAPPER if depth == 1 else MatchKind.TRANSITIVE_CALL),
                         confidence=MatchConfidence.MEDIUM,
                         evidence=edge.evidence,
                         symbol=caller.qualified_name,
@@ -222,8 +216,7 @@ def _operation_ids(
     values = {
         operation.operation_id
         for contract in (old_contract, new_contract)
-        if (operation := contract.operations.get(key)) is not None
-        and operation.operation_id
+        if (operation := contract.operations.get(key)) is not None and operation.operation_id
     }
     return tuple(sorted(values))
 

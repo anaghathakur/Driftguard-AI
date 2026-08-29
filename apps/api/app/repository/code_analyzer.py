@@ -27,9 +27,7 @@ _HTTP_RECEIVER_HINTS = (
     "requests",
     "session",
 )
-_JS_CALL_PATTERN = re.compile(
-    r"(?P<callee>[A-Za-z_$][\w$]*(?:\s*\.\s*[A-Za-z_$][\w$]*)*)\s*\("
-)
+_JS_CALL_PATTERN = re.compile(r"(?P<callee>[A-Za-z_$][\w$]*(?:\s*\.\s*[A-Za-z_$][\w$]*)*)\s*\(")
 _JS_FUNCTION_PATTERN = re.compile(
     r"(?:\bexport\s+)?(?:\basync\s+)?\bfunction\s+"
     r"(?P<name>[A-Za-z_$][\w$]*)\s*\([^)]*\)\s*\{"
@@ -300,9 +298,7 @@ class _PythonVisitor(ast.NodeVisitor):
         parts = _python_call_parts(node.func)
         current = self._symbol_stack[-1] if self._symbol_stack else None
         environment = (
-            self._environment_stack[-1]
-            if self._environment_stack
-            else self.module_constants
+            self._environment_stack[-1] if self._environment_stack else self.module_constants
         )
         anchor = _python_http_anchor(
             node,
@@ -714,7 +710,7 @@ def _resolve_javascript_string(
         return None
     if re.fullmatch(r"[A-Za-z_$][\w$]*", value):
         return values.get(value)
-    if value[0:1] in {"\"", "'"} and value[-1:] == value[0]:
+    if value[0:1] in {'"', "'"} and value[-1:] == value[0]:
         return _decode_simple_string(value[1:-1])
     if value.startswith("`") and value.endswith("`"):
         body = value[1:-1]
@@ -987,9 +983,9 @@ def _split_javascript_concatenation(value: str) -> list[str]:
             if current in {"'", '"', "`"}:
                 state = "string"
                 quote = current
-            elif current in "([{" :
+            elif current in "([{":
                 depth += 1
-            elif current in ")]}" :
+            elif current in ")]}":
                 depth = max(0, depth - 1)
             elif current == "+" and depth == 0:
                 parts.append(value[start:index].strip())
@@ -1013,11 +1009,7 @@ def _enclosing_javascript_symbol(
     symbols: list[CodeSymbol],
     offset: int,
 ) -> CodeSymbol | None:
-    candidates = [
-        symbol
-        for symbol in symbols
-        if symbol.start_offset <= offset < symbol.end_offset
-    ]
+    candidates = [symbol for symbol in symbols if symbol.start_offset <= offset < symbol.end_offset]
     if not candidates:
         return None
     return min(candidates, key=lambda symbol: symbol.end_offset - symbol.start_offset)
@@ -1086,7 +1078,7 @@ def _decode_simple_string(value: str) -> str:
         value.replace(r"\n", "\n")
         .replace(r"\t", "\t")
         .replace(r"\'", "'")
-        .replace(r'\"', '"')
+        .replace(r"\"", '"')
         .replace(r"\\", "\\")
     )
 
@@ -1132,9 +1124,7 @@ def propagation_paths(
         return []
     symbols = graph.symbol_map()
     callers = graph.callers()
-    queue: deque[tuple[str, int, tuple[CodeCallEdge, ...]]] = deque(
-        [(anchor.symbol_id, 0, ())]
-    )
+    queue: deque[tuple[str, int, tuple[CodeCallEdge, ...]]] = deque([(anchor.symbol_id, 0, ())])
     best_depth: dict[str, int] = {anchor.symbol_id: 0}
     results: list[tuple[int, CodeSymbol, CodeCallEdge, tuple[CodeCallEdge, ...]]] = []
     while queue:

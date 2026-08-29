@@ -37,6 +37,27 @@ async def readiness(response: Response) -> dict[str, object]:
         issues.append("The selected test-plan provider is unsupported.")
     if settings.github_write_provider not in {"mock", "github_app"}:
         issues.append("The selected GitHub write provider is unsupported.")
+    if settings.github_check_provider not in {"mock", "github_app"}:
+        issues.append("The selected GitHub Check provider is unsupported.")
+    if settings.automation_worker_enabled and not settings.github_webhook_secret:
+        issues.append("GitHub automation is enabled but the webhook secret is not configured.")
+    if settings.auth_mode not in {"local", "github"}:
+        issues.append("The selected authentication mode is unsupported.")
+    if settings.github_oauth_provider not in {"mock", "github"}:
+        issues.append("The selected GitHub OAuth provider is unsupported.")
+    if settings.auth_mode == "github":
+        if len(settings.session_secret) < 32:
+            issues.append(
+                "GitHub authentication requires a session secret of at least 32 characters."
+            )
+        if settings.github_oauth_provider == "github" and (
+            not settings.github_oauth_client_id or not settings.github_oauth_client_secret
+        ):
+            issues.append("GitHub authentication is enabled but OAuth credentials are incomplete.")
+        if not settings.frontend_url.startswith(("http://", "https://")):
+            issues.append("The configured frontend URL is invalid.")
+        if not settings.github_oauth_callback_url.startswith(("http://", "https://")):
+            issues.append("The configured GitHub OAuth callback URL is invalid.")
 
     if settings.ai_provider == "gemini" and not settings.gemini_api_key:
         issues.append("Gemini is selected but its API key is not configured.")
@@ -48,6 +69,11 @@ async def readiness(response: Response) -> dict[str, object]:
             issues.append("GitHub App writes are selected but App credentials are incomplete.")
         elif not private_key.is_file():
             issues.append("GitHub App writes are selected but the private-key file is unavailable.")
+    if settings.github_check_provider == "github_app":
+        private_key = Path(settings.github_app_private_key_path)
+        if not settings.github_app_id or not private_key.is_file():
+            issues.append("GitHub Check Runs are selected but App credentials are incomplete.")
+
 
     ready = not issues
     if not ready:
@@ -57,6 +83,12 @@ async def readiness(response: Response) -> dict[str, object]:
         "status": "ready" if ready else "not_ready",
         "checks": {
             "storage": settings.storage_backend,
+            "persistence": settings.storage_backend,
+            "auth_provider": settings.auth_mode,
+            "github_oauth": (
+                settings.github_oauth_provider if settings.auth_mode == "github" else "not_required"
+            ),
+            "github_app": settings.github_write_provider,
             "analysis_engine": "ready",
             "risk_classifier": "model_with_deterministic_fallback",
             "migration_provider": settings.ai_provider,
@@ -64,11 +96,17 @@ async def readiness(response: Response) -> dict[str, object]:
             "test_plan_provider": settings.test_plan_provider,
             "github_write_provider": settings.github_write_provider,
             "monitor_scheduler": (
-                "process_local_enabled"
-                if settings.monitor_scheduler_enabled
-                else "disabled"
+                "process_local_enabled" if settings.monitor_scheduler_enabled else "disabled"
             ),
         },
+            "github_webhooks": (
+                "ready" if settings.github_webhook_secret else "disabled"
+            ),
+            "background_jobs": "sqlite_durable",
+            "automation_worker": (
+                "process_local_enabled" if settings.automation_worker_enabled else "disabled"
+            ),
+            "github_checks": settings.github_check_provider,
+            "automation_persistence": "sqlite_sidecar",
         "issues": issues,
     }
-

@@ -7,7 +7,30 @@ from typing import Annotated
 
 from fastapi import Depends
 
+from apps.api.app.auth.provider import (
+    GitHubOAuthProvider,
+    MockGitHubOAuthProvider,
+    RealGitHubOAuthProvider,
+)
+from apps.api.app.auth.service import AuthService
 from apps.api.app.core.config import settings
+from apps.api.app.github.automation_provider import (
+    GitHubAutomationProvider,
+    MockGitHubAutomationProvider,
+    RealGitHubAutomationProvider,
+)
+from apps.api.app.github.consumer_automation import ConsumerAutomationDispatcher
+from apps.api.app.github.contracts import ContractDiscoveryService
+from apps.api.app.github.installations import (
+    GitHubInstallationProvider,
+    MockGitHubInstallationProvider,
+    RealGitHubInstallationProvider,
+)
+from apps.api.app.github.service import GitHubOnboardingService
+from apps.api.app.github.source import ConnectedAwareGitHubRepositorySource
+from apps.api.app.github.webhooks import GitHubWebhookService
+from apps.api.app.github.worker import AutomationWorker
+from apps.api.app.github.write_guard import WorkspaceAuthorizedGitHubWriteProvider
 from apps.api.app.infrastructure.firestore_analysis_repository import (
     FirestoreAnalysisRepository,
 )
@@ -17,8 +40,14 @@ from apps.api.app.infrastructure.firestore_monitor_repository import (
 from apps.api.app.infrastructure.sqlite_analysis_repository import (
     SQLiteAnalysisRepository,
 )
+from apps.api.app.infrastructure.sqlite_automation_repository import (
+    SQLiteAutomationRepository,
+)
 from apps.api.app.infrastructure.sqlite_monitor_repository import (
     SQLiteMonitorRepository,
+)
+from apps.api.app.infrastructure.sqlite_workspace_repository import (
+    SQLiteWorkspaceRepository,
 )
 from apps.api.app.migration.provider import (
     GeminiMigrationRecommendationProvider,
@@ -46,7 +75,9 @@ from apps.api.app.patches.service import PatchProposalService
 from apps.api.app.ports.analysis_repository import (
     AnalysisRepository,
 )
+from apps.api.app.ports.automation_repository import AutomationRepository
 from apps.api.app.ports.monitor_repository import ApiMonitorRepository
+from apps.api.app.ports.workspace_repository import WorkspaceRepository
 from apps.api.app.pull_requests.provider import (
     GitHubAppWriteProvider,
     GitHubWriteProvider,
@@ -66,6 +97,124 @@ from apps.api.app.validation.provider import (
     TestPlanProvider,
 )
 from apps.api.app.validation.service import PatchValidationService
+
+
+@lru_cache
+def get_workspace_repository() -> WorkspaceRepository:
+    if settings.storage_backend == "sqlite":
+        repository: WorkspaceRepository = SQLiteWorkspaceRepository(settings.database_path)
+        repository.initialize()
+        return repository
+    from apps.api.app.infrastructure.firestore_workspace_repository import (
+        FirestoreWorkspaceRepository,
+    )
+
+    repository = FirestoreWorkspaceRepository(
+        project_id=settings.firestore_project_id or None,
+        database_id=settings.firestore_database_id,
+    )
+    repository.initialize()
+    return repository
+
+
+@lru_cache
+def get_github_oauth_provider() -> GitHubOAuthProvider:
+    if settings.github_oauth_provider == "mock":
+        return MockGitHubOAuthProvider()
+    if settings.github_oauth_provider == "github":
+        return RealGitHubOAuthProvider(
+            settings.github_oauth_client_id,
+            settings.github_oauth_client_secret,
+            settings.github_timeout_seconds,
+        )
+    raise RuntimeError("DRIFTGUARD_GITHUB_OAUTH_PROVIDER must be 'github' or 'mock'")
+
+
+@lru_cache
+def get_auth_service() -> AuthService:
+    return AuthService(
+        get_workspace_repository(),
+        get_github_oauth_provider(),
+        callback_url=settings.github_oauth_callback_url,
+        frontend_url=settings.frontend_url,
+        session_ttl_hours=settings.session_ttl_hours,
+        session_secret=settings.session_secret or "local-development-only",
+    )
+
+
+@lru_cache
+def get_github_installation_provider() -> GitHubInstallationProvider:
+    if settings.github_write_provider == "mock":
+        return MockGitHubInstallationProvider()
+    if settings.github_write_provider == "github_app":
+        return RealGitHubInstallationProvider(
+            settings.github_app_id,
+            settings.github_app_private_key_path,
+            settings.github_timeout_seconds,
+        )
+    raise RuntimeError("A supported GitHub App provider is required")
+
+
+def get_github_onboarding_service() -> GitHubOnboardingService:
+    return GitHubOnboardingService(
+        get_workspace_repository(),
+        get_github_installation_provider(),
+        get_auth_service(),
+    )
+
+
+@lru_cache
+def get_automation_repository() -> AutomationRepository:
+    repository: AutomationRepository = SQLiteAutomationRepository(settings.database_path)
+    repository.initialize()
+    return repository
+
+
+def get_github_webhook_service() -> GitHubWebhookService:
+    return GitHubWebhookService(
+        get_automation_repository(),
+        get_workspace_repository(),
+        secret=settings.github_webhook_secret,
+    )
+
+
+@lru_cache
+def get_github_automation_provider() -> GitHubAutomationProvider:
+    if settings.github_check_provider == "mock":
+        return MockGitHubAutomationProvider()
+    if settings.github_check_provider == "github_app":
+        return RealGitHubAutomationProvider(
+            settings.github_app_id,
+            settings.github_app_private_key_path,
+            settings.github_timeout_seconds,
+        )
+    raise RuntimeError("DRIFTGUARD_GITHUB_CHECK_PROVIDER must be either 'mock' or 'github_app'")
+
+
+@lru_cache
+def get_contract_discovery_service() -> ContractDiscoveryService:
+    return ContractDiscoveryService(get_automation_repository(), get_github_automation_provider())
+
+
+@lru_cache
+def get_automation_worker() -> AutomationWorker:
+    return AutomationWorker(
+        get_automation_repository(),
+        get_workspace_repository(),
+        get_github_onboarding_service(),
+        get_github_automation_provider(),
+        get_contract_discovery_service(),
+        AnalysisPipelineService(
+            get_default_analysis_repository(),
+            get_risk_classifier(),
+            get_migration_recommendation_service(),
+        ),
+        frontend_url=settings.frontend_url,
+        enabled=settings.automation_worker_enabled,
+        poll_seconds=settings.automation_worker_poll_seconds,
+        max_retries=settings.automation_max_retries,
+        retry_base_seconds=settings.automation_retry_base_seconds,
+    )
 
 
 @lru_cache
@@ -165,7 +314,10 @@ def get_analysis_pipeline_service(
 
 
 def get_github_repository_source() -> GitHubRepositorySource:
-    return GitHubRepositorySource()
+    return ConnectedAwareGitHubRepositorySource(
+        get_workspace_repository(),
+        get_github_installation_provider(),
+    )
 
 
 @lru_cache
@@ -218,14 +370,16 @@ def get_patch_validation_service(
 @lru_cache
 def get_github_write_provider() -> GitHubWriteProvider:
     if settings.github_write_provider == "mock":
-        return MockGitHubWriteProvider()
-    if settings.github_write_provider == "github_app":
-        return GitHubAppWriteProvider(
+        delegate: GitHubWriteProvider = MockGitHubWriteProvider()
+    elif settings.github_write_provider == "github_app":
+        delegate = GitHubAppWriteProvider(
             app_id=settings.github_app_id,
             private_key_path=settings.github_app_private_key_path,
             timeout_seconds=settings.github_timeout_seconds,
         )
-    raise RuntimeError("DRIFTGUARD_GITHUB_WRITE_PROVIDER must be either 'mock' or 'github_app'")
+    else:
+        raise RuntimeError("DRIFTGUARD_GITHUB_WRITE_PROVIDER must be either 'mock' or 'github_app'")
+    return WorkspaceAuthorizedGitHubWriteProvider(delegate, get_workspace_repository())
 
 
 def get_pull_request_workflow_service(
@@ -270,6 +424,9 @@ def get_monitor_check_service(
         specification_source,
         github_source,
         analysis_pipeline,
+        consumer_dispatcher=ConsumerAutomationDispatcher(
+            get_automation_repository(), get_workspace_repository()
+        ).dispatch,
     )
 
 
@@ -284,6 +441,9 @@ def get_default_monitor_check_service() -> MonitorCheckService:
             get_risk_classifier(),
             get_migration_recommendation_service(),
         ),
+        consumer_dispatcher=ConsumerAutomationDispatcher(
+            get_automation_repository(), get_workspace_repository()
+        ).dispatch,
     )
 
 

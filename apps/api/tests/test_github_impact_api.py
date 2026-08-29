@@ -67,9 +67,7 @@ def test_github_impact_route_reuses_existing_analysis_pipeline(
 
     assert response.status_code == 200
     body = response.json()
-    assert source.calls == [
-        ("https://github.com/example/payment-client", "main")
-    ]
+    assert source.calls == [("https://github.com/example/payment-client", "main")]
     assert body["comparison"]["summary"]["breaking_changes"] == 1
     assert body["repository"]["scanned_files"] == 1
     assert body["impact_summary"]["total_matches"] == 1

@@ -33,9 +33,7 @@ def _error_body(
 
 def register_exception_handlers(app: FastAPI) -> None:
     @app.exception_handler(DriftGuardError)
-    async def handle_driftguard_error(
-        _request: Request, exc: DriftGuardError
-    ) -> JSONResponse:
+    async def handle_driftguard_error(_request: Request, exc: DriftGuardError) -> JSONResponse:
         return JSONResponse(
             status_code=exc.status_code,
             content=_error_body(exc.code, exc.message, exc.details),
@@ -46,8 +44,7 @@ def register_exception_handlers(app: FastAPI) -> None:
         _request: Request, exc: RequestValidationError
     ) -> JSONResponse:
         safe_details = [
-            {"location": list(error["loc"]), "message": error["msg"]}
-            for error in exc.errors()
+            {"location": list(error["loc"]), "message": error["msg"]} for error in exc.errors()
         ]
         return JSONResponse(
             status_code=422,
@@ -55,4 +52,3 @@ def register_exception_handlers(app: FastAPI) -> None:
                 "request_validation_error", "The request is invalid.", safe_details
             ),
         )
-

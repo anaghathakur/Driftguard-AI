@@ -29,9 +29,7 @@ router = APIRouter(
 def get_migration_provider_status(
     service: Annotated[
         MigrationRecommendationService,
-        Depends(
-            get_migration_recommendation_service
-        ),
+        Depends(get_migration_recommendation_service),
     ],
 ) -> MigrationProviderStatus:
     """Return safe information about the active provider."""

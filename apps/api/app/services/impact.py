@@ -33,16 +33,12 @@ class ImpactAnalysisService:
             new_contract=new_contract,
             new_content=new_content,
         )
-        repository = RepositoryArchiveScanner().scan(
-            repository_filename, repository_content
-        )
+        repository = RepositoryArchiveScanner().scan(repository_filename, repository_content)
         impact_result = ApiImpactMatcher().analyze(
             comparison.changes, repository, old_contract, new_contract
         )
         impacts = impact_result.impacts
-        impacted_paths = {
-            match.file_path for impact in impacts for match in impact.matches
-        }
+        impacted_paths = {match.file_path for impact in impacts for match in impact.matches}
         total_matches = sum(len(impact.matches) for impact in impacts)
         return ImpactAnalysisResponse(
             comparison=comparison,

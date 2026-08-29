@@ -1,0 +1,8 @@
+.analysis-list-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin-bottom: 12px; }
+.analysis-list-toolbar > span { color: var(--text-subtle); font-size: 10px; }
+.analysis-filter { width: min(100%, 430px); grid-template-columns: repeat(3,minmax(0,1fr)); }
+.analyses-table-panel { overflow: hidden; }
+@media (max-width: 600px) {
+  .analysis-list-toolbar { align-items: stretch; flex-direction: column; }
+  .analysis-filter { width: 100%; }
+}

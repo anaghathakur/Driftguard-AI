@@ -182,9 +182,7 @@ def test_specification_url_update_establishes_a_new_baseline_without_check():
     response = asyncio.run(
         service.update(
             "monitor-1",
-            MonitorUpdateRequest(
-                specification_url="https://new.example.com/openapi.json"
-            ),
+            MonitorUpdateRequest(specification_url="https://new.example.com/openapi.json"),
         )
     )
 
@@ -496,9 +494,7 @@ def test_scheduler_checks_only_due_enabled_monitors_and_continues_after_failure(
             created_at=NOW - timedelta(hours=2),
         )
     )
-    repository.create(
-        replace(monitor(spec("1.0.0")), monitor_id="not-due", created_at=NOW)
-    )
+    repository.create(replace(monitor(spec("1.0.0")), monitor_id="not-due", created_at=NOW))
     repository.create(
         replace(
             monitor(spec("1.0.0")),

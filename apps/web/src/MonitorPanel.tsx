@@ -18,10 +18,12 @@ import {
 
 type MonitorPanelProps = {
   onViewAnalysis: (analysisId: string) => void;
+  onMonitorsChanged?: (monitors: ApiMonitor[]) => void;
 };
 
 export function MonitorPanel({
   onViewAnalysis,
+  onMonitorsChanged,
 }: MonitorPanelProps) {
   const [monitors, setMonitors] = useState<ApiMonitor[]>([]);
   const [checks, setChecks] = useState<Record<string, MonitorCheck[]>>({});
@@ -39,12 +41,14 @@ export function MonitorPanel({
 
   const refresh = useCallback(async () => {
     try {
-      setMonitors(await getMonitors());
+      const items = await getMonitors();
+      setMonitors(items);
+      onMonitorsChanged?.(items);
       setError(null);
     } catch (reason) {
       setError(message(reason, "API monitors could not be loaded."));
     }
-  }, []);
+  }, [onMonitorsChanged]);
 
   useEffect(() => {
     void refresh();

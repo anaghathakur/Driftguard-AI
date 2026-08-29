@@ -62,9 +62,7 @@ def test_invalid_json_has_safe_error_shape(client, base_spec):
 
 
 def test_missing_file_has_safe_validation_error(client, base_spec):
-    response = client.post(
-        "/api/v1/specifications/compare", files={"old_spec": upload(base_spec)}
-    )
+    response = client.post("/api/v1/specifications/compare", files={"old_spec": upload(base_spec)})
     assert response.status_code == 422
     assert response.json()["error"]["code"] == "request_validation_error"
     assert "traceback" not in response.text.lower()
@@ -136,9 +134,7 @@ def test_impact_analysis_returns_comparison_scan_and_matches(client, base_spec, 
             "new_spec": upload(new, "new.json"),
             "repository": repository_upload(
                 {
-                    "demo/src/client.py": (
-                        'response = requests.post("/payments", json=payload)\n'
-                    ),
+                    "demo/src/client.py": ('response = requests.post("/payments", json=payload)\n'),
                     "demo/README.md": "ignored",
                 }
             ),

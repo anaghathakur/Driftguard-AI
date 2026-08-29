@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable
+import logging
+from collections.abc import Awaitable, Callable
 from dataclasses import replace
 from datetime import UTC, datetime
 from time import perf_counter
@@ -34,6 +35,8 @@ from apps.api.app.schemas.monitor import (
 from apps.api.app.services.analysis_pipeline import AnalysisPipelineService
 
 Clock = Callable[[], datetime]
+ConsumerDispatcher = Callable[[ApiMonitor, str, str], Awaitable[None]]
+logger = logging.getLogger("driftguard.monitoring")
 
 
 class ApiMonitorService:
@@ -145,6 +148,7 @@ class MonitorCheckService:
         analysis_pipeline: AnalysisPipelineService,
         *,
         clock: Clock = lambda: datetime.now(UTC),
+        consumer_dispatcher: ConsumerDispatcher | None = None,
     ) -> None:
         self.repository = repository
         self.specification_source = specification_source
@@ -152,6 +156,7 @@ class MonitorCheckService:
         self.analysis_pipeline = analysis_pipeline
         self.clock = clock
         self._active: set[str] = set()
+        self.consumer_dispatcher = consumer_dispatcher
         self._active_guard = asyncio.Lock()
 
     async def check(self, monitor_id: str) -> MonitorCheckResponse:
@@ -270,6 +275,17 @@ class MonitorCheckService:
                 last_error_message=None,
             )
             self.repository.finish_check(finished_monitor, finished_check)
+            if self.consumer_dispatcher:
+                try:
+                    await self.consumer_dispatcher(
+                        finished_monitor, analysis.analysis_id, archive.commit_sha
+                    )
+                except Exception as dispatch_error:
+                    logger.warning(
+                        "Consumer automation dispatch failed monitor_id=%s error_code=%s",
+                        monitor.monitor_id,
+                        getattr(dispatch_error, "code", "unexpected_error"),
+                    )
             return check_response(finished_check)
         except Exception as exc:
             error = _safe_error(exc)

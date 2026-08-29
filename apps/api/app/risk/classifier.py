@@ -77,10 +77,7 @@ class RiskClassifier:
         impacts: list[ChangeImpact],
     ) -> list[RiskPrediction]:
         matches = {impact.change_id: impact.matches for impact in impacts}
-        return [
-            self.predict(change, list(matches.get(change.change_id, [])))
-            for change in changes
-        ]
+        return [self.predict(change, list(matches.get(change.change_id, []))) for change in changes]
 
     def predict(self, change: ApiChange, matches: list[ImpactMatch]) -> RiskPrediction:
         features = generate_features(change, matches)
@@ -94,9 +91,7 @@ class RiskClassifier:
             classes = [RiskLevel(value) for value in loaded.model.classes_]
             probabilities = {
                 level: round(
-                    float(probabilities_raw[classes.index(level)])
-                    if level in classes
-                    else 0.0,
+                    float(probabilities_raw[classes.index(level)]) if level in classes else 0.0,
                     6,
                 )
                 for level in RiskLevel
@@ -189,9 +184,7 @@ class RiskClassifier:
         return self._loaded
 
     def _fallback_prediction(self, change, features, baseline) -> RiskPrediction:
-        probabilities = {
-            level: float(level == baseline.level) for level in RiskLevel
-        }
+        probabilities = {level: float(level == baseline.level) for level in RiskLevel}
         return RiskPrediction(
             change_id=change.change_id,
             risk_level=baseline.level,
@@ -256,11 +249,7 @@ def _fallback_drivers(features: dict[str, float]) -> list[RiskDriver]:
         "match_count_norm": 0,
     }
     ranked = sorted(
-        (
-            (name, value, weights[name] * value)
-            for name, value in features.items()
-            if value
-        ),
+        ((name, value, weights[name] * value) for name, value in features.items() if value),
         key=lambda item: abs(item[2]),
         reverse=True,
     )

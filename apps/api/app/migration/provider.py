@@ -85,9 +85,7 @@ class MigrationRecommendationProvider(ABC):
         return None
 
 
-class MockMigrationRecommendationProvider(
-    MigrationRecommendationProvider
-):
+class MockMigrationRecommendationProvider(MigrationRecommendationProvider):
     """Offline deterministic provider used by default."""
 
     name = MigrationProvider.MOCK
@@ -103,9 +101,7 @@ class MockMigrationRecommendationProvider(
         return deterministic_recommendation(context)
 
 
-class GeminiMigrationRecommendationProvider(
-    MigrationRecommendationProvider
-):
+class GeminiMigrationRecommendationProvider(MigrationRecommendationProvider):
     """Optional Gemini provider with validated JSON output."""
 
     name = MigrationProvider.GEMINI
@@ -121,10 +117,7 @@ class GeminiMigrationRecommendationProvider(
     ) -> None:
         self.api_key = api_key.strip()
 
-        self.model_name = (
-            model_name.strip()
-            or "configured-gemini-model"
-        )
+        self.model_name = model_name.strip() or "configured-gemini-model"
 
         self.timeout_seconds = max(
             1.0,
@@ -147,10 +140,7 @@ class GeminiMigrationRecommendationProvider(
         if self.api_key:
             return None
 
-        return (
-            "Gemini is configured but "
-            "DRIFTGUARD_GEMINI_API_KEY is missing."
-        )
+        return "Gemini is configured but DRIFTGUARD_GEMINI_API_KEY is missing."
 
     def generate(
         self,
@@ -160,9 +150,7 @@ class GeminiMigrationRecommendationProvider(
         del context
 
         if not self.api_key:
-            raise MigrationProviderError(
-                "Gemini API key is not configured."
-            )
+            raise MigrationProviderError("Gemini API key is not configured.")
 
         url = (
             "https://generativelanguage.googleapis.com/"
@@ -213,34 +201,22 @@ class GeminiMigrationRecommendationProvider(
                 text = _extract_text(response)
 
                 try:
-                    return (
-                        GeneratedMigrationContent
-                        .model_validate_json(text)
-                    )
+                    return GeneratedMigrationContent.model_validate_json(text)
                 except ValidationError as exc:
                     raise MigrationResponseError(
-                        
-                            "Gemini output did not match "
-                            "the migration schema."
-                        
+                        "Gemini output did not match the migration schema."
                     ) from exc
 
             except Exception as exc:
                 last_error = exc
 
-                if (
-                    attempt >= self.max_retries
-                    or not _retryable(exc)
-                ):
+                if attempt >= self.max_retries or not _retryable(exc):
                     break
 
                 time.sleep(0.15 * (attempt + 1))
 
         raise MigrationProviderError(
-            
-                "Gemini did not return a valid "
-                "migration recommendation."
-            
+            "Gemini did not return a valid migration recommendation."
         ) from last_error
 
 
@@ -325,9 +301,7 @@ def _send_json(
             request,
             timeout=timeout,
         ) as response:
-            return json.loads(
-                response.read().decode("utf-8")
-            )
+            return json.loads(response.read().decode("utf-8"))
 
     except urllib.error.HTTPError as exc:
         raise MigrationTransportError(
@@ -357,9 +331,7 @@ def _send_json(
         UnicodeDecodeError,
         json.JSONDecodeError,
     ) as exc:
-        raise MigrationResponseError(
-            "Gemini returned an invalid JSON envelope."
-        ) from exc
+        raise MigrationResponseError("Gemini returned an invalid JSON envelope.") from exc
 
 
 def _extract_text(
@@ -368,25 +340,17 @@ def _extract_text(
     try:
         parts = response["candidates"][0]["content"]["parts"]
 
-        text = "".join(
-            part.get("text", "")
-            for part in parts
-            if isinstance(part, dict)
-        )
+        text = "".join(part.get("text", "") for part in parts if isinstance(part, dict))
 
     except (
         KeyError,
         IndexError,
         TypeError,
     ) as exc:
-        raise MigrationResponseError(
-            "Gemini response did not contain text output."
-        ) from exc
+        raise MigrationResponseError("Gemini response did not contain text output.") from exc
 
     if not text.strip():
-        raise MigrationResponseError(
-            "Gemini response text was empty."
-        )
+        raise MigrationResponseError("Gemini response text was empty.")
 
     return text
 
@@ -394,6 +358,4 @@ def _extract_text(
 def _retryable(
     exc: Exception,
 ) -> bool:
-    return bool(
-        getattr(exc, "retryable", False)
-    )
+    return bool(getattr(exc, "retryable", False))

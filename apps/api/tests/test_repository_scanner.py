@@ -72,9 +72,7 @@ def test_enforces_archive_and_entry_limits_in_scanner():
     archive = make_zip({"one.py": b"pass", "two.py": b"pass"})
 
     with pytest.raises(DriftGuardError) as error:
-        RepositoryArchiveScanner(max_archive_bytes=len(archive) - 1).scan(
-            "repository.zip", archive
-        )
+        RepositoryArchiveScanner(max_archive_bytes=len(archive) - 1).scan("repository.zip", archive)
     assert error.value.details["limit"] == "archive_bytes"
 
     with pytest.raises(DriftGuardError) as error:

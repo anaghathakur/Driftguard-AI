@@ -99,9 +99,7 @@ def _origins(name: str, default: tuple[str, ...]) -> tuple[str, ...]:
             or parsed.query
             or parsed.fragment
         ):
-            raise RuntimeError(
-                f"{name} must contain comma-separated HTTP(S) origins without paths"
-            )
+            raise RuntimeError(f"{name} must contain comma-separated HTTP(S) origins without paths")
         if origin not in origins:
             origins.append(origin)
 
@@ -114,6 +112,27 @@ def _origins(name: str, default: tuple[str, ...]) -> tuple[str, ...]:
 class Settings:
     app_name: str = "DriftGuard AI"
     api_prefix: str = "/api/v1"
+
+    auth_mode: str = os.getenv("DRIFTGUARD_AUTH_MODE", "local").strip().lower()
+    session_secret: str = os.getenv("DRIFTGUARD_SESSION_SECRET", "").strip()
+    session_cookie_name: str = os.getenv(
+        "DRIFTGUARD_SESSION_COOKIE_NAME", "driftguard_session"
+    ).strip()
+    session_ttl_hours: int = _positive_int("DRIFTGUARD_SESSION_TTL_HOURS", 24 * 7)
+    secure_cookies: bool = _boolean("DRIFTGUARD_SECURE_COOKIES", False)
+    github_oauth_provider: str = (
+        os.getenv("DRIFTGUARD_GITHUB_OAUTH_PROVIDER", "github").strip().lower()
+    )
+    github_oauth_client_id: str = os.getenv("DRIFTGUARD_GITHUB_OAUTH_CLIENT_ID", "").strip()
+    github_oauth_client_secret: str = os.getenv("DRIFTGUARD_GITHUB_OAUTH_CLIENT_SECRET", "").strip()
+    github_oauth_callback_url: str = os.getenv(
+        "DRIFTGUARD_GITHUB_OAUTH_CALLBACK_URL",
+        "http://127.0.0.1:8000/api/v1/auth/github/callback",
+    ).strip()
+    frontend_url: str = (
+        os.getenv("DRIFTGUARD_FRONTEND_URL", "http://localhost:5173").strip().rstrip("/")
+    )
+    github_app_install_url: str = os.getenv("DRIFTGUARD_GITHUB_APP_INSTALL_URL", "").strip()
 
     cors_allowed_origins: tuple[str, ...] = _origins(
         "DRIFTGUARD_CORS_ALLOWED_ORIGINS",
@@ -251,6 +270,19 @@ class Settings:
         100,
     )
 
+    max_repository_tree_entries: int = _positive_int(
+        "DRIFTGUARD_MAX_REPOSITORY_TREE_ENTRIES", 20_000
+    )
+    max_repository_source_files: int = _positive_int(
+        "DRIFTGUARD_MAX_REPOSITORY_SOURCE_FILES", 2_000
+    )
+    max_repository_source_file_bytes: int = _positive_int(
+        "DRIFTGUARD_MAX_REPOSITORY_SOURCE_FILE_BYTES", 1024 * 1024
+    )
+    max_repository_source_bytes: int = _positive_int(
+        "DRIFTGUARD_MAX_REPOSITORY_SOURCE_BYTES", 25 * 1024 * 1024
+    )
+
     max_code_symbols: int = _positive_int(
         "DRIFTGUARD_MAX_CODE_SYMBOLS",
         10_000,
@@ -347,6 +379,31 @@ class Settings:
     max_pull_request_modified_bytes: int = _positive_int(
         "DRIFTGUARD_MAX_PULL_REQUEST_MODIFIED_BYTES",
         1024 * 1024,
+    )
+
+    github_webhook_secret: str = os.getenv(
+        "DRIFTGUARD_GITHUB_WEBHOOK_SECRET", ""
+    ).strip()
+    max_webhook_bytes: int = _positive_int(
+        "DRIFTGUARD_MAX_WEBHOOK_BYTES", 2 * 1024 * 1024
+    )
+    automation_worker_enabled: bool = _boolean(
+        "DRIFTGUARD_AUTOMATION_WORKER_ENABLED", False
+    )
+    automation_worker_poll_seconds: float = _positive_float(
+        "DRIFTGUARD_AUTOMATION_WORKER_POLL_SECONDS", 5.0
+    )
+    automation_max_retries: int = _non_negative_int(
+        "DRIFTGUARD_AUTOMATION_MAX_RETRIES", 3
+    )
+    automation_retry_base_seconds: float = _positive_float(
+        "DRIFTGUARD_AUTOMATION_RETRY_BASE_SECONDS", 15.0
+    )
+    github_check_provider: str = os.getenv(
+        "DRIFTGUARD_GITHUB_CHECK_PROVIDER", "mock"
+    ).strip().lower()
+    max_check_annotations: int = _positive_int(
+        "DRIFTGUARD_MAX_CHECK_ANNOTATIONS", 50
     )
 
 

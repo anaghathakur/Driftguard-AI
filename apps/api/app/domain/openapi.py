@@ -49,4 +49,3 @@ class NormalizedContract(DomainModel):
 
 def operation_key(path: str, method: str) -> str:
     return f"{method.upper()} {path}"
-

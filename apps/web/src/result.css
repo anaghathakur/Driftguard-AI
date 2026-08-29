@@ -1,0 +1,62 @@
+#analysis-result { margin-top: 0 !important; scroll-margin-top: 24px; border: 0 !important; border-radius: 0 !important; background: transparent !important; padding: 0 !important; box-shadow: none !important; backdrop-filter: none !important; }
+.result-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 24px; border-bottom: 1px solid var(--border); padding: 4px 0 20px; }
+.result-heading-badges { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+.result-title { margin: 0; color: var(--text); font-family: Geist, Inter, sans-serif; font-size: clamp(24px,3vw,32px); font-weight: 650; letter-spacing: -.02em; }
+.result-source { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 8px; color: var(--text-subtle); font-size: 10px; }
+.result-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
+.result-actions code { max-width: 190px; overflow: hidden; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-lowest); padding: 10px; color: var(--text-subtle); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+.result-summary-label { margin-top: 18px; }
+.result-metrics { display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); gap: 12px; margin-top: 9px; }
+.result-change-list { display: flex; flex-direction: column; gap: 14px; }
+.change-card { overflow: hidden; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface-low); }
+.change-card-header { padding: 18px; }
+.change-before-after { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 10px; margin-top: 14px; }
+.change-value { min-width: 0; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-lowest); padding: 11px; }
+.change-value > span { display: block; margin-bottom: 8px; color: var(--text-subtle); font-size: 8px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
+.change-value pre { max-height: 160px; margin: 0; overflow: auto; color: var(--text-muted); font-size: 10px; line-height: 1.55; white-space: pre-wrap; word-break: break-word; }
+.change-value-before { border-left: 2px solid rgba(255,180,171,.6); }
+.change-value-after { border-left: 2px solid rgba(123,219,128,.6); }
+.impact-path { border-top: 1px solid var(--border); background: var(--surface-lowest); padding: 18px; }
+.impact-summary-grid { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 8px; margin-top: 12px; }
+.impact-match { position: relative; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); padding: 12px; }
+.impact-match + .impact-match { margin-top: 9px; }
+.impact-match-details { margin-top: 11px; border-top: 1px solid var(--border); padding-top: 10px; }
+.impact-match-details summary { width: fit-content; cursor: pointer; color: var(--cyan); font-size: 10px; font-weight: 650; }
+.impact-trace { position: relative; margin-top: 10px; padding-left: 18px; }
+.impact-trace::before { position: absolute; inset: 7px auto 7px 5px; width: 1px; background: var(--border-strong); content: ""; }
+.impact-trace-step { position: relative; padding: 0 0 12px 10px; color: var(--text-muted); font-size: 10px; }
+.impact-trace-step:last-child { padding-bottom: 0; }
+.impact-trace-step::before { position: absolute; top: 5px; left: -16px; width: 7px; height: 7px; border: 1px solid var(--violet); border-radius: 50%; background: var(--surface-lowest); content: ""; }
+.impact-trace-step code { color: var(--cyan); }
+.result-insight-grid { display: grid; grid-template-columns: minmax(260px,.8fr) minmax(0,1.2fr); border-top: 1px solid var(--border); background: var(--border); gap: 1px; }
+.risk-gauge { position: relative; width: 152px; height: 76px; margin: 22px auto 8px; overflow: hidden; }
+.risk-gauge::before { position: absolute; inset: 0; border: 10px solid var(--surface-high); border-bottom: 0; border-radius: 152px 152px 0 0; content: ""; }
+.risk-gauge-fill { position: absolute; inset: 0; border: 10px solid currentColor; border-bottom: 0; border-radius: 152px 152px 0 0; clip-path: polygon(0 0, var(--risk-progress) 0, var(--risk-progress) 100%, 0 100%); }
+.risk-gauge-value { position: absolute; inset: auto 0 0; text-align: center; }
+.risk-gauge-value strong { font-size: 27px; }
+.risk-gauge-value small { color: var(--text-subtle); font-size: 10px; }
+.risk-driver-details { margin-top: 14px; }
+.risk-driver-details summary { cursor: pointer; color: var(--cyan); font-size: 10px; font-weight: 650; }
+.patch-diff { max-width: 100%; overflow: hidden; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-lowest); }
+.patch-diff pre { max-width: 100%; overflow: auto; }
+.diff-added { background: rgba(35,134,54,.15); color: #a8e6ae; }
+.diff-removed { background: rgba(248,81,73,.15); color: #ffc1bb; }
+.validation-groups { display: grid; gap: 12px; }
+.status-grid { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 12px; }
+.status-grid .metric-card strong { font-size: 17px; text-transform: capitalize; }
+.status-issues { margin: 16px 0 0; }
+.status-issues strong { display: block; }
+.status-issues ul { margin: 7px 0 0; padding-left: 18px; }
+
+@media (max-width: 900px) {
+  .result-header { flex-direction: column; }
+  .result-actions { justify-content: flex-start; }
+  .result-insight-grid { grid-template-columns: 1fr; }
+  .status-grid { grid-template-columns: repeat(2,minmax(0,1fr)); }
+}
+@media (max-width: 650px) {
+  .result-actions { width: 100%; }
+  .result-actions button { flex: 1; }
+  .result-actions code { width: 100%; max-width: none; }
+  .result-metrics, .change-before-after, .impact-summary-grid, .status-grid { grid-template-columns: 1fr 1fr; }
+}

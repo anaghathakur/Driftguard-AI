@@ -8,12 +8,17 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta
 from pathlib import Path
 
+from apps.api.app.core.workspace_context import (
+    LOCAL_WORKSPACE_ID,
+    current_workspace_id,
+)
 from apps.api.app.domain.monitor import ApiMonitor, MonitorCheckRecord, MonitorCheckStatus
 from apps.api.app.ports.monitor_repository import ApiMonitorRepository
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS api_monitors (
     monitor_id TEXT PRIMARY KEY,
+    workspace_id TEXT NOT NULL DEFAULT '00000000-0000-0000-0000-000000000001',
     name TEXT NOT NULL,
     specification_url TEXT NOT NULL,
     repository_url TEXT NOT NULL,
@@ -70,12 +75,14 @@ class SQLiteMonitorRepository(ApiMonitorRepository):
         self.database_path.parent.mkdir(parents=True, exist_ok=True)
         with self._connect() as connection:
             connection.executescript(SCHEMA)
+            _ensure_workspace_column(connection)
 
     def create(self, monitor: ApiMonitor) -> None:
         with self._transaction() as connection:
             connection.execute(
-                f"INSERT INTO api_monitors ({_MONITOR_COLUMNS}) VALUES ({_MONITOR_MARKERS})",
-                _monitor_values(monitor),
+                f"INSERT INTO api_monitors (workspace_id, {_MONITOR_COLUMNS}) "
+                f"VALUES (?, {_MONITOR_MARKERS})",
+                (current_workspace_id(), *_monitor_values(monitor)),
             )
 
     def save(self, monitor: ApiMonitor) -> None:
@@ -85,15 +92,16 @@ class SQLiteMonitorRepository(ApiMonitorRepository):
     def get(self, monitor_id: str) -> ApiMonitor | None:
         with self._connect() as connection:
             row = connection.execute(
-                "SELECT * FROM api_monitors WHERE monitor_id = ?",
-                (monitor_id,),
+                "SELECT * FROM api_monitors WHERE monitor_id = ? AND workspace_id = ?",
+                (monitor_id, current_workspace_id()),
             ).fetchone()
         return _monitor(row) if row is not None else None
 
     def list(self) -> list[ApiMonitor]:
         with self._connect() as connection:
             rows = connection.execute(
-                "SELECT * FROM api_monitors ORDER BY created_at DESC"
+                "SELECT * FROM api_monitors WHERE workspace_id = ? ORDER BY created_at DESC",
+                (current_workspace_id(),),
             ).fetchall()
         return [_monitor(row) for row in rows]
 
@@ -110,8 +118,8 @@ class SQLiteMonitorRepository(ApiMonitorRepository):
     def delete(self, monitor_id: str) -> bool:
         with self._transaction() as connection:
             cursor = connection.execute(
-                "DELETE FROM api_monitors WHERE monitor_id = ?",
-                (monitor_id,),
+                "DELETE FROM api_monitors WHERE monitor_id = ? AND workspace_id = ?",
+                (monitor_id, current_workspace_id()),
             )
         return cursor.rowcount > 0
 
@@ -174,8 +182,8 @@ class SQLiteMonitorRepository(ApiMonitorRepository):
         )
         values = _monitor_values(monitor)
         connection.execute(
-            f"UPDATE api_monitors SET {assignments} WHERE monitor_id = ?",
-            (*values[1:], monitor.monitor_id),
+            f"UPDATE api_monitors SET {assignments} WHERE monitor_id = ? AND workspace_id = ?",
+            (*values[1:], monitor.monitor_id, current_workspace_id()),
         )
 
     @contextmanager
@@ -284,9 +292,7 @@ def _monitor(row: sqlite3.Row) -> ApiMonitor:
         last_changed_at=_optional_datetime(row["last_changed_at"]),
         last_successful_analysis_id=row["last_successful_analysis_id"],
         last_check_status=(
-            MonitorCheckStatus(row["last_check_status"])
-            if row["last_check_status"]
-            else None
+            MonitorCheckStatus(row["last_check_status"]) if row["last_check_status"] else None
         ),
         last_error_code=row["last_error_code"],
         last_error_message=row["last_error_message"],
@@ -319,3 +325,20 @@ def _datetime(value: str) -> datetime:
 
 def _optional_datetime(value: str | None) -> datetime | None:
     return _datetime(value) if value else None
+
+
+def _ensure_workspace_column(connection: sqlite3.Connection) -> None:
+    columns = {row[1] for row in connection.execute("PRAGMA table_info(api_monitors)")}
+    if "workspace_id" not in columns:
+        connection.execute(
+            "ALTER TABLE api_monitors ADD COLUMN workspace_id TEXT NOT NULL "
+            f"DEFAULT '{LOCAL_WORKSPACE_ID}'"
+        )
+    connection.execute(
+        "UPDATE api_monitors SET workspace_id = ? WHERE workspace_id IS NULL OR workspace_id = ''",
+        (LOCAL_WORKSPACE_ID,),
+    )
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS idx_api_monitors_workspace "
+        "ON api_monitors(workspace_id, created_at DESC)"
+    )

@@ -2,30 +2,45 @@ import {
   useCallback,
   useEffect,
   useState,
+  type CSSProperties,
 } from "react";
 
 import {
+  analyzeConnectedRepositoryImpact,
   analyzeGitHubRepositoryImpact,
   analyzeRepositoryImpact,
   compareSpecifications,
+  connectGitHubInstallation,
+  createWorkspace,
   createPullRequest,
   generatePatchProposal,
   getAnalyses,
+  getAuthStatus,
+  getGitHubInstallations,
+  githubInstallationStartUrl,
   getAnalysisChanges,
   getAnalysisMatches,
   getAnalysisPdf,
   getAnalysisReport,
   getMigrationProviderStatus,
+  getRepositoryConnections,
   getMigrationRecommendations,
+  getMonitors,
   getPatchProposal,
   getPatchProposals,
   getPatchValidation,
   getPatchValidations,
   getReadinessStatus,
   getRiskPredictions,
+  setRepositoryConnectionEnabled,
+  switchWorkspace,
+  syncGitHubInstallation,
   previewPullRequest,
   validatePatchProposal,
   type AnalysisHistoryItem,
+  type AuthStatus,
+  type GitHubInstallation,
+  type ApiMonitor,
   type ApiChange,
   type ComparisonResponse,
   type GitHubPullRequestRecord,
@@ -37,13 +52,22 @@ import {
   type PullRequestPreview,
   type ReadinessStatus,
   type PersistedMatch,
+  type RepositoryConnection,
   type RepositoryMatch,
   type RiskPrediction,
 } from "./lib/api";
-import { MonitorPanel } from "./MonitorPanel";
+import { AppShell, type AppPage } from "./components/AppShell";
+import { OverviewPage } from "./pages/OverviewPage";
+import { SystemStatusPage } from "./pages/SystemStatusPage";
+import { NewAnalysisPage } from "./pages/NewAnalysisPage";
+import { AnalysesPage } from "./pages/AnalysesPage";
+import { MonitorsPage } from "./pages/MonitorsPage";
+import { CreateWorkspacePage, SignInPage } from "./pages/AuthPages";
+import { RepositoriesPage } from "./pages/RepositoriesPage";
+import "./result.css";
 
 type AnalysisMode = "comparison" | "impact";
-type RepositorySourceMode = "upload" | "github";
+type RepositorySourceMode = "upload" | "github" | "connected";
 
 type AnalysisResult =
   | {
@@ -56,6 +80,7 @@ type AnalysisResult =
     };
 
 function App() {
+  const [activePage, setActivePage] = useState<AppPage>("overview");
   const [mode, setMode] =
     useState<AnalysisMode>("comparison");
   const [oldSpec, setOldSpec] =
@@ -66,6 +91,7 @@ function App() {
     useState<File | null>(null);
   const [repositorySource, setRepositorySource] =
     useState<RepositorySourceMode>("upload");
+  const [connectedRepositoryId, setConnectedRepositoryId] = useState("");
   const [repositoryUrl, setRepositoryUrl] =
     useState("");
   const [repositoryRef, setRepositoryRef] =
@@ -102,6 +128,16 @@ function App() {
     useState<string | null>(null);
   const [openingAnalysisId, setOpeningAnalysisId] =
     useState<string | null>(null);
+  const [monitors, setMonitors] = useState<ApiMonitor[]>([]);
+const [authStatus, setAuthStatus] = useState<AuthStatus | null>(null);
+  const [isLoadingAuth, setIsLoadingAuth] = useState(true);
+  const [workspaceName, setWorkspaceName] = useState("");
+  const [workspaceBusy, setWorkspaceBusy] = useState(false);
+  const [workspaceError, setWorkspaceError] = useState<string | null>(null);
+  const [installations, setInstallations] = useState<GitHubInstallation[]>([]);
+  const [connectedRepositories, setConnectedRepositories] = useState<RepositoryConnection[]>([]);
+  const [repositoriesLoading, setRepositoriesLoading] = useState(false);
+  const [repositoriesError, setRepositoriesError] = useState<string | null>(null);
 
   const loadHistory = useCallback(async () => {
     setIsLoadingHistory(true);
@@ -128,13 +164,17 @@ function App() {
     (mode === "comparison" ||
       (repositorySource === "upload"
         ? repository !== null
-        : repositoryUrl.trim().length > 0));
+        : repositorySource === "connected"
+          ? connectedRepositoryId.length > 0
+          : repositoryUrl.trim().length > 0));
 
   const analysisRequirement =
     oldSpec === null || newSpec === null
       ? "Select both OpenAPI files to continue."
       : mode === "impact" && repositorySource === "upload" && repository === null
         ? "Select the repository ZIP to continue."
+        : mode === "impact" && repositorySource === "connected" && !connectedRepositoryId
+          ? "Select an authorized connected repository to continue."
         : mode === "impact" &&
             repositorySource === "github" &&
             repositoryUrl.trim().length === 0
@@ -144,9 +184,40 @@ function App() {
   const analysisProgress =
     mode === "comparison"
       ? "Analyzing API changes..."
-      : repositorySource === "github"
-        ? "Fetching and scanning the GitHub repository..."
+      : repositorySource === "connected"
+        ? "Fetching authorized source files through the GitHub App..."
+        : repositorySource === "github"
+          ? "Fetching and scanning the public GitHub repository..."
         : "Scanning repository and building the dependency graph...";
+
+useEffect(() => {
+    let active = true;
+    void getAuthStatus()
+      .then((status) => { if (active) setAuthStatus(status); })
+      .catch(() => { if (active) setAuthStatus(null); })
+      .finally(() => { if (active) setIsLoadingAuth(false); });
+    return () => { active = false; };
+  }, []);
+
+  const loadRepositories = useCallback(async () => {
+    setRepositoriesLoading(true);
+    setRepositoriesError(null);
+    try {
+      const [installationItems, repositoryItems] = await Promise.all([
+        getGitHubInstallations(), getRepositoryConnections(),
+      ]);
+      setInstallations(installationItems);
+      setConnectedRepositories(repositoryItems);
+    } catch (error) {
+      setRepositoriesError(error instanceof Error ? error.message : "Repositories could not be loaded.");
+    } finally {
+      setRepositoriesLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (authStatus?.mode === "local" || authStatus?.workspace) void loadRepositories();
+  }, [authStatus, loadRepositories]);
 
   useEffect(() => {
     let active = true;
@@ -182,6 +253,20 @@ function App() {
   useEffect(() => {
     void loadHistory();
   }, [loadHistory]);
+
+  useEffect(() => {
+    let active = true;
+    void getMonitors()
+      .then((items) => {
+        if (active) setMonitors(items);
+      })
+      .catch(() => {
+        if (active) setMonitors([]);
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
 
   async function loadInsights(
     analysisId: string,
@@ -232,6 +317,14 @@ function App() {
 
     if (
       mode === "impact" &&
+      repositorySource === "connected" &&
+      !connectedRepositoryId
+    ) {
+      setAnalysisError("Select an authorized connected repository for impact analysis.");
+      return;
+    }
+    if (
+      mode === "impact" &&
       repositorySource === "github" &&
       !repositoryUrl.trim()
     ) {
@@ -259,28 +352,22 @@ function App() {
           mode: "comparison",
           data,
         });
+        setActivePage("analysis-result");
 
         await loadInsights(data.analysis_id);
         void loadHistory();
       } else {
-        const data =
-          repositorySource === "upload"
-            ? await analyzeRepositoryImpact(
-                oldSpec,
-                newSpec,
-                repository as File,
-              )
-            : await analyzeGitHubRepositoryImpact(
-                oldSpec,
-                newSpec,
-                repositoryUrl,
-                repositoryRef,
-              );
+        const data = repositorySource === "upload"
+          ? await analyzeRepositoryImpact(oldSpec, newSpec, repository as File)
+          : repositorySource === "connected"
+            ? await analyzeConnectedRepositoryImpact(oldSpec, newSpec, connectedRepositoryId, repositoryRef)
+            : await analyzeGitHubRepositoryImpact(oldSpec, newSpec, repositoryUrl, repositoryRef);
 
         setAnalysisResult({
           mode: "impact",
           data,
         });
+        setActivePage("analysis-result");
 
         await loadInsights(data.analysis_id);
         void loadHistory();
@@ -339,6 +426,7 @@ function App() {
 
       setRisks(riskData);
       setMigrations(migrationData);
+      setActivePage("analysis-result");
 
       window.setTimeout(() => {
         document
@@ -387,292 +475,102 @@ function App() {
   const analysisId =
     analysisResult?.data.analysis_id ?? null;
 
+  function handleNavigate(page: AppPage) {
+    setActivePage(page);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+async function handleCreateWorkspace() {
+    setWorkspaceBusy(true); setWorkspaceError(null);
+    try { await createWorkspace(workspaceName); setAuthStatus(await getAuthStatus()); }
+    catch (error) { setWorkspaceError(error instanceof Error ? error.message : "Workspace could not be created."); }
+    finally { setWorkspaceBusy(false); }
+  }
+
+  async function handleSwitchWorkspace(workspaceId: string) {
+    await switchWorkspace(workspaceId);
+    setAuthStatus(await getAuthStatus());
+    setActivePage("overview");
+    void loadHistory();
+    void loadRepositories();
+  }
+
+  async function handleConnectDevelopmentInstallation() {
+    setRepositoriesLoading(true); setRepositoriesError(null);
+    try { await connectGitHubInstallation(1); await loadRepositories(); }
+    catch (error) { setRepositoriesError(error instanceof Error ? error.message : "Installation could not be connected."); }
+    finally { setRepositoriesLoading(false); }
+  }
+
+  async function handleSyncInstallation(installationId: string) {
+    setRepositoriesLoading(true); setRepositoriesError(null);
+    try { await syncGitHubInstallation(installationId); await loadRepositories(); }
+    catch (error) { setRepositoriesError(error instanceof Error ? error.message : "Repositories could not be synchronized."); }
+    finally { setRepositoriesLoading(false); }
+  }
+
+  async function handleToggleRepository(item: RepositoryConnection) {
+    try { await setRepositoryConnectionEnabled(item.id, !item.enabled); await loadRepositories(); }
+    catch (error) { setRepositoriesError(error instanceof Error ? error.message : "Repository state could not be updated."); }
+  }
+
+  if (isLoadingAuth) return <main className="auth-page"><div className="empty-state">Loading workspace…</div></main>;
+  if (authStatus?.mode === "github" && !authStatus.authenticated) return <SignInPage />;
+  if (authStatus?.mode === "github" && !authStatus.workspace) return <CreateWorkspacePage name={workspaceName} error={workspaceError} busy={workspaceBusy} onNameChange={setWorkspaceName} onSubmit={() => void handleCreateWorkspace()} />;
+
   return (
-    <div className="min-h-screen text-slate-100">
-      <header className="sticky top-0 z-20 border-b border-white/10 bg-slate-950/90 backdrop-blur-xl">
-        <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-4 px-4 py-4 sm:px-6">
-          <div className="flex items-center gap-3">
-            <div aria-hidden="true" className="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-cyan-400 to-violet-500 font-bold text-slate-950 shadow-lg shadow-cyan-500/20">
-              DG
-            </div>
-
-            <div>
-              <h1 className="text-lg font-semibold text-white">
-                DriftGuard AI
-              </h1>
-              <p className="text-xs text-slate-400">
-                API change intelligence platform
-              </p>
-            </div>
-          </div>
-
-          <nav aria-label="Primary navigation" className="order-3 flex w-full gap-1 overflow-x-auto text-sm text-slate-300 md:order-none md:w-auto">
-            <NavLink href="#dashboard">Dashboard</NavLink>
-            <NavLink href="#new-analysis">New analysis</NavLink>
-            <NavLink href="#api-monitors">API monitors</NavLink>
-            <NavLink href="#recent-analyses">Recent analyses</NavLink>
-          </nav>
-
-          <BackendBadge
-            backendError={backendError}
-            providerStatus={providerStatus}
+    <AppShell
+      activePage={activePage}
+      backendReady={backendError ? false : readiness ? readiness.status === "ready" : null}
+      onNavigate={handleNavigate}
+      workspaceLabel={authStatus?.workspace?.name ?? "Local workspace"}
+      userLabel={authStatus?.user?.github_display_name ?? authStatus?.user?.github_login}
+      workspaces={authStatus?.workspaces ?? []}
+      activeWorkspaceId={authStatus?.workspace?.id}
+      onSwitchWorkspace={(id) => void handleSwitchWorkspace(id)}
+    >
+      <div id="dashboard" className="scroll-mt-6">
+        {activePage === "overview" && (
+          <OverviewPage
+            analyses={history}
+            monitors={monitors}
+            isLoading={isLoadingHistory}
+            error={historyError}
+            openingAnalysisId={openingAnalysisId}
+            onNavigateToAnalysis={() => handleNavigate("new-analysis")}
+            onNavigateToMonitors={() => handleNavigate("monitors")}
+            onOpenAnalysis={(item) => void handleOpenAnalysis(item)}
           />
-        </div>
-      </header>
+        )}
+        {activePage === "new-analysis" && (
+          <NewAnalysisPage
+            mode={mode}
+            setMode={setMode}
+            oldSpec={oldSpec}
+            setOldSpec={setOldSpec}
+            newSpec={newSpec}
+            setNewSpec={setNewSpec}
+            repository={repository}
+            setRepository={setRepository}
+            repositorySource={repositorySource}
+            setRepositorySource={setRepositorySource}
+            connectedRepositories={connectedRepositories.filter((item) => item.enabled && !item.removed)}
+            connectedRepositoryId={connectedRepositoryId}
+            setConnectedRepositoryId={setConnectedRepositoryId}
+            repositoryUrl={repositoryUrl}
+            setRepositoryUrl={setRepositoryUrl}
+            repositoryRef={repositoryRef}
+            setRepositoryRef={setRepositoryRef}
+            isAnalyzing={isAnalyzing}
+            analysisError={analysisError}
+            canAnalyze={canAnalyze}
+            analysisRequirement={analysisRequirement}
+            analysisProgress={analysisProgress}
+            onAnalyze={() => void handleAnalyze()}
+          />
+        )}
 
-      <main id="dashboard" className="mx-auto max-w-7xl scroll-mt-28 px-4 py-8 sm:px-6 sm:py-10">
-        <section className="mb-8 max-w-4xl">
-          <p className="mb-3 text-sm font-semibold uppercase tracking-[0.24em] text-cyan-300">
-            API contract analysis
-          </p>
-
-          <h2 className="text-4xl font-bold tracking-tight text-white md:text-5xl">
-            Detect breaking API changes before they break
-            production.
-          </h2>
-
-          <p className="mt-5 max-w-2xl text-lg leading-8 text-slate-400">
-            Turn contract drift into an explainable, human-reviewed workflow—from
-            affected source code to a statically validated Pull Request proposal.
-          </p>
-
-          <div className="mt-6 flex flex-wrap gap-3">
-            <QuickLink href="#new-analysis" primary>Analyze API change</QuickLink>
-            <QuickLink href="#api-monitors">Create API monitor</QuickLink>
-            <QuickLink href="#recent-analyses">Recent analyses</QuickLink>
-          </div>
-        </section>
-
-        <ol aria-label="DriftGuard workflow" className="mb-8 grid gap-3 sm:grid-cols-5">
-          <WorkflowStep number="1" label="Detect" detail="Contract drift" />
-          <WorkflowStep number="2" label="Understand" detail="Code impact + risk" />
-          <WorkflowStep number="3" label="Fix" detail="Guidance + patch" />
-          <WorkflowStep number="4" label="Validate" detail="Static checks + tests" />
-          <WorkflowStep number="5" label="Review" detail="Human-controlled PR" />
-        </ol>
-
-        <section id="new-analysis" className="scroll-mt-28 grid items-start gap-6 lg:grid-cols-[1fr_360px]">
-          <div className="rounded-2xl border border-white/10 bg-white/5 p-6 shadow-2xl shadow-black/30 backdrop-blur-xl">
-            <div className="mb-6">
-              <h3 className="text-xl font-semibold text-white">
-                Start a new analysis
-              </h3>
-              <p className="mt-1 text-sm text-slate-400">
-                Choose the analysis type and upload your
-                files.
-              </p>
-            </div>
-
-            <div className="mb-7 grid grid-cols-2 gap-3 rounded-xl border border-white/5 bg-black/25 p-1.5">
-              <ModeButton
-                active={mode === "comparison"}
-                disabled={isAnalyzing}
-                onClick={() =>
-                  setMode("comparison")
-                }
-              >
-                Specification comparison
-              </ModeButton>
-
-              <ModeButton
-                active={mode === "impact"}
-                disabled={isAnalyzing}
-                onClick={() => setMode("impact")}
-              >
-                Repository impact
-              </ModeButton>
-            </div>
-
-            <div className="grid gap-5 md:grid-cols-2">
-              <FileField
-                label="Old OpenAPI specification"
-                description="Current or previously released contract"
-                accept=".json,.yaml,.yml"
-                file={oldSpec}
-                onChange={setOldSpec}
-                disabled={isAnalyzing}
-              />
-
-              <FileField
-                label="New OpenAPI specification"
-                description="Proposed or updated contract"
-                accept=".json,.yaml,.yml"
-                file={newSpec}
-                onChange={setNewSpec}
-                disabled={isAnalyzing}
-              />
-            </div>
-
-            {mode === "impact" && (
-              <div className="mt-5">
-                <p className="text-sm font-semibold text-slate-200">
-                  Repository source
-                </p>
-                <div className="mt-3 grid grid-cols-2 gap-3 rounded-xl border border-white/5 bg-black/25 p-1.5">
-                  <ModeButton
-                    active={repositorySource === "upload"}
-                    disabled={isAnalyzing}
-                    onClick={() =>
-                      setRepositorySource("upload")
-                    }
-                  >
-                    Upload ZIP
-                  </ModeButton>
-                  <ModeButton
-                    active={repositorySource === "github"}
-                    disabled={isAnalyzing}
-                    onClick={() =>
-                      setRepositorySource("github")
-                    }
-                  >
-                    GitHub repository
-                  </ModeButton>
-                </div>
-
-                {repositorySource === "upload" ? (
-                  <div className="mt-4">
-                    <FileField
-                      label="Repository archive"
-                      description="Upload the source repository as a ZIP file"
-                      accept=".zip"
-                      file={repository}
-                      onChange={setRepository}
-                      disabled={isAnalyzing}
-                    />
-                  </div>
-                ) : (
-                  <div className="mt-4 grid gap-4 rounded-xl border border-white/10 bg-black/20 p-4 md:grid-cols-2">
-                    <label className="block">
-                      <span className="block text-sm font-semibold text-slate-100">
-                        GitHub repository URL
-                      </span>
-                      <span className="mt-1 block text-xs leading-5 text-slate-500">
-                        Public github.com repositories only
-                      </span>
-                      <input
-                        type="url"
-                        value={repositoryUrl}
-                        onChange={(event) =>
-                          setRepositoryUrl(
-                            event.target.value,
-                          )
-                        }
-                        placeholder="https://github.com/owner/repository"
-                        disabled={isAnalyzing}
-                        className="mt-4 w-full rounded-lg border border-white/10 bg-slate-950/80 px-3 py-2.5 text-sm text-slate-100 outline-none transition placeholder:text-slate-600 focus:border-cyan-400/50 disabled:cursor-not-allowed disabled:opacity-60"
-                      />
-                    </label>
-
-                    <label className="block">
-                      <span className="block text-sm font-semibold text-slate-100">
-                        Branch, tag, or ref
-                      </span>
-                      <span className="mt-1 block text-xs leading-5 text-slate-500">
-                        Optional; defaults to the repository default branch
-                      </span>
-                      <input
-                        type="text"
-                        value={repositoryRef}
-                        onChange={(event) =>
-                          setRepositoryRef(
-                            event.target.value,
-                          )
-                        }
-                        placeholder="main, v2.0.0, or commit SHA"
-                        disabled={isAnalyzing}
-                        className="mt-4 w-full rounded-lg border border-white/10 bg-slate-950/80 px-3 py-2.5 text-sm text-slate-100 outline-none transition placeholder:text-slate-600 focus:border-cyan-400/50 disabled:cursor-not-allowed disabled:opacity-60"
-                      />
-                    </label>
-                  </div>
-                )}
-              </div>
-            )}
-
-            {analysisError && (
-              <div role="alert" className="mt-5 rounded-xl border border-rose-400/20 bg-rose-400/10 px-4 py-3 text-sm text-rose-200">
-                {analysisError}
-              </div>
-            )}
-
-            <div className="mt-7 flex flex-col gap-3 border-t border-white/10 pt-6 sm:flex-row sm:items-center sm:justify-between">
-              <p aria-live="polite" className="text-sm text-slate-400">
-                {isAnalyzing ? analysisProgress : analysisRequirement}
-              </p>
-
-              <button
-                type="button"
-                disabled={!canAnalyze}
-                onClick={() => void handleAnalyze()}
-                aria-busy={isAnalyzing}
-                className="rounded-xl bg-gradient-to-r from-cyan-400 to-violet-500 px-6 py-3 text-sm font-semibold text-slate-950 transition hover:scale-[1.01] disabled:cursor-not-allowed disabled:bg-none disabled:bg-slate-700 disabled:text-slate-400"
-              >
-                {isAnalyzing
-                  ? analysisProgress
-                  : "Analyze changes"}
-              </button>
-            </div>
-          </div>
-
-          <aside className="space-y-5">
-            <div>
-              <p className="text-xs font-semibold uppercase tracking-[0.2em] text-cyan-300">
-                System status
-              </p>
-              <h3 className="mt-2 text-lg font-semibold text-white">
-                Capability providers
-              </h3>
-            </div>
-            <MetricCard
-              label="Analysis engine"
-              value={
-                backendError ? "Offline" : "Ready"
-              }
-              detail="OpenAPI comparison and impact scanning"
-            />
-
-            <MetricCard
-              label="Risk classifier"
-              value={backendError ? "Unavailable" : "Ready"}
-              detail="Versioned model with deterministic fallback"
-            />
-
-            <MetricCard
-              label="Migration provider"
-              value={
-                providerStatus
-                  ? providerStatus.active_provider.toUpperCase()
-                  : backendError
-                    ? "Unavailable"
-                    : "Checking"
-              }
-              detail={
-                providerStatus
-                  ? providerStatus.provider_model
-                  : "Waiting for backend connection"
-              }
-            />
-
-            <MetricCard
-              label="Patch provider"
-              value={readiness?.checks.patch_provider.toUpperCase() ?? "Checking"}
-              detail="Review-only structured edits"
-            />
-
-            <MetricCard
-              label="Test-plan provider"
-              value={readiness?.checks.test_plan_provider.toUpperCase() ?? "Checking"}
-              detail="Static discovery; tests are not executed"
-            />
-
-            <MetricCard
-              label="GitHub write provider"
-              value={readiness?.checks.github_write_provider.toUpperCase() ?? "Checking"}
-              detail="Explicit PR confirmation; no automatic merge"
-            />
-          </aside>
-        </section>
-
-        {analysisResult && comparison && (
+        {activePage === "analysis-result" && analysisResult && comparison && (
           <AnalysisResultPanel
             result={analysisResult}
             comparison={comparison}
@@ -684,13 +582,14 @@ function App() {
           />
         )}
 
-        <MonitorPanel
+        {activePage === "monitors" && <MonitorsPage
           onViewAnalysis={(monitorAnalysisId) =>
             void handleViewAnalysis(monitorAnalysisId)
           }
-        />
+          onMonitorsChanged={setMonitors}
+        />}
 
-        <RecentAnalyses
+        {activePage === "analyses" && <AnalysesPage
           analyses={history}
           isLoading={isLoadingHistory}
           error={historyError}
@@ -699,241 +598,29 @@ function App() {
           onOpen={(item) =>
             void handleOpenAnalysis(item)
           }
-        />
-      </main>
-    </div>
-  );
-}
+        />}
 
-function NavLink({ href, children }: { href: string; children: string }) {
-  return (
-    <a
-      href={href}
-      className="whitespace-nowrap rounded-lg px-3 py-2 transition hover:bg-white/5 hover:text-cyan-200"
-    >
-      {children}
-    </a>
-  );
-}
-
-function QuickLink({
-  href,
-  children,
-  primary = false,
-}: {
-  href: string;
-  children: string;
-  primary?: boolean;
-}) {
-  return (
-    <a
-      href={href}
-      className={`rounded-xl px-4 py-2.5 text-sm font-semibold transition ${
-        primary
-          ? "bg-gradient-to-r from-cyan-400 to-violet-500 text-slate-950 hover:brightness-110"
-          : "border border-white/10 bg-white/5 text-slate-200 hover:border-cyan-400/30 hover:text-cyan-100"
-      }`}
-    >
-      {children}
-    </a>
-  );
-}
-
-function WorkflowStep({
-  number,
-  label,
-  detail,
-}: {
-  number: string;
-  label: string;
-  detail: string;
-}) {
-  return (
-    <li className="rounded-xl border border-white/10 bg-white/[0.04] p-3">
-      <div className="flex items-center gap-2">
-        <span aria-hidden="true" className="flex h-6 w-6 items-center justify-center rounded-full bg-cyan-400/10 text-xs font-bold text-cyan-200">
-          {number}
-        </span>
-        <span className="text-sm font-semibold text-white">{label}</span>
+        {activePage === "repositories" && <RepositoriesPage
+          installations={installations}
+          repositories={connectedRepositories}
+          loading={repositoriesLoading}
+          error={repositoriesError}
+          installUrl={readiness?.checks.github_write_provider === "github_app" ? githubInstallationStartUrl() : null}
+          developmentMode={readiness?.checks.github_write_provider === "mock"}
+          onConnectMock={() => void handleConnectDevelopmentInstallation()}
+          onSync={(id) => void handleSyncInstallation(id)}
+          onToggle={(item) => void handleToggleRepository(item)}
+          onAnalyze={(item) => { setMode("impact"); setRepositorySource("connected"); setConnectedRepositoryId(item.id); handleNavigate("new-analysis"); }}
+        />}
+        {activePage === "system-status" && (
+          <SystemStatusPage
+            backendError={backendError}
+            providerStatus={providerStatus}
+            readiness={readiness}
+          />
+        )}
       </div>
-      <p className="mt-2 text-xs text-slate-500">{detail}</p>
-    </li>
-  );
-}
-
-type RecentAnalysesProps = {
-  analyses: AnalysisHistoryItem[];
-  isLoading: boolean;
-  error: string | null;
-  openingAnalysisId: string | null;
-  onRefresh: () => void;
-  onOpen: (item: AnalysisHistoryItem) => void;
-};
-
-function RecentAnalyses({
-  analyses,
-  isLoading,
-  error,
-  openingAnalysisId,
-  onRefresh,
-  onOpen,
-}: RecentAnalysesProps) {
-  return (
-    <section id="recent-analyses" className="mt-8 scroll-mt-28 rounded-2xl border border-white/10 bg-white/5 p-6 shadow-xl shadow-black/20 backdrop-blur-xl">
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <h3 className="text-lg font-semibold text-white">
-            Recent analyses
-          </h3>
-          <p className="mt-1 text-sm text-slate-400">
-            Reopen a saved analysis without uploading the
-            files again.
-          </p>
-        </div>
-
-        <button
-          type="button"
-          onClick={onRefresh}
-          disabled={isLoading}
-          className="rounded-lg border border-cyan-400/20 bg-cyan-400/5 px-4 py-2 text-sm font-medium text-cyan-200 transition hover:border-cyan-300/40 hover:bg-cyan-400/10 disabled:cursor-wait disabled:opacity-60"
-        >
-          {isLoading ? "Refreshing..." : "Refresh"}
-        </button>
-      </div>
-
-      {error && (
-        <div role="alert" className="mt-5 rounded-xl border border-rose-400/20 bg-rose-400/10 px-4 py-3 text-sm text-rose-200">
-          {error}
-        </div>
-      )}
-
-      {!error && isLoading && analyses.length === 0 && (
-        <div role="status" className="mt-8 flex min-h-36 items-center justify-center rounded-xl border border-dashed border-white/10 bg-black/20">
-          <p className="text-sm text-cyan-200">
-            Loading saved analyses...
-          </p>
-        </div>
-      )}
-
-      {!error && !isLoading && analyses.length === 0 && (
-        <div className="mt-8 flex min-h-36 items-center justify-center rounded-xl border border-dashed border-white/10 bg-black/20">
-          <div className="text-center">
-            <p className="font-medium text-slate-200">
-              No saved analyses
-            </p>
-            <p className="mt-1 text-sm text-slate-500">
-              Complete a comparison or repository impact
-              analysis to create history.
-            </p>
-          </div>
-        </div>
-      )}
-
-      {analyses.length > 0 && (
-        <div className="mt-6 space-y-3">
-          {analyses.map((item) => {
-            const isOpening =
-              openingAnalysisId === item.analysis_id;
-
-            return (
-              <article
-                key={item.analysis_id}
-                className="rounded-xl border border-white/10 bg-black/20 p-4 transition hover:border-cyan-400/30 hover:bg-white/[0.03]"
-              >
-                <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-                  <div className="min-w-0">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span className="rounded-full bg-cyan-400/10 px-3 py-1 text-xs font-semibold uppercase text-cyan-200">
-                        {item.kind}
-                      </span>
-                      <StatusBadge status={item.status} />
-                      <span className="text-xs text-slate-500">
-                        {formatDate(item.created_at)}
-                      </span>
-                    </div>
-
-                    <code className="mt-3 block truncate text-xs text-slate-400">
-                      {item.analysis_id}
-                    </code>
-                  </div>
-
-                  <div className="flex flex-wrap items-center gap-3">
-                    <HistoryMetric
-                      label="Changes"
-                      value={item.total_changes}
-                    />
-                    <HistoryMetric
-                      label="Matches"
-                      value={item.total_matches}
-                    />
-
-                    <button
-                      type="button"
-                      onClick={() => onOpen(item)}
-                      disabled={
-                        isOpening ||
-                        item.status !== "succeeded"
-                      }
-                      className="rounded-lg bg-gradient-to-r from-cyan-400 to-violet-500 px-4 py-2 text-sm font-semibold text-slate-950 transition hover:scale-[1.01] disabled:cursor-not-allowed disabled:bg-none disabled:bg-slate-700 disabled:text-slate-400"
-                    >
-                      {isOpening
-                        ? "Opening..."
-                        : "Open result"}
-                    </button>
-                  </div>
-                </div>
-
-                {item.failure && (
-                  <p className="mt-3 text-sm text-rose-300">
-                    {item.failure.message}
-                  </p>
-                )}
-              </article>
-            );
-          })}
-        </div>
-      )}
-    </section>
-  );
-}
-
-function HistoryMetric({
-  label,
-  value,
-}: {
-  label: string;
-  value: number;
-}) {
-  return (
-    <div className="min-w-20 rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2 text-center">
-      <p className="text-[10px] uppercase tracking-wider text-slate-500">
-        {label}
-      </p>
-      <p className="mt-1 text-sm font-semibold text-white">
-        {value}
-      </p>
-    </div>
-  );
-}
-
-function StatusBadge({
-  status,
-}: {
-  status: AnalysisHistoryItem["status"];
-}) {
-  const className =
-    status === "succeeded"
-      ? "bg-emerald-400/10 text-emerald-300"
-      : status === "failed"
-        ? "bg-rose-400/10 text-rose-300"
-        : "bg-amber-400/10 text-amber-300";
-
-  return (
-    <span
-      className={`rounded-full px-3 py-1 text-xs font-semibold uppercase ${className}`}
-    >
-      {status}
-    </span>
+    </AppShell>
   );
 }
 
@@ -1012,159 +699,6 @@ function buildSavedImpact(
   };
 }
 
-function formatDate(value: string) {
-  return new Intl.DateTimeFormat(undefined, {
-    dateStyle: "medium",
-    timeStyle: "short",
-  }).format(new Date(value));
-}
-
-type BackendBadgeProps = {
-  backendError: boolean;
-  providerStatus: MigrationProviderStatus | null;
-};
-
-function BackendBadge({
-  backendError,
-  providerStatus,
-}: BackendBadgeProps) {
-  return (
-    <div
-      className={`flex items-center gap-2 rounded-full border px-3 py-1.5 ${
-        backendError
-          ? "border-rose-400/20 bg-rose-400/10"
-          : "border-cyan-400/20 bg-cyan-400/10"
-      }`}
-    >
-      <span
-        className={`h-2 w-2 rounded-full ${
-          backendError
-            ? "bg-rose-400 shadow-[0_0_10px_rgba(251,113,133,0.9)]"
-            : "bg-cyan-300 shadow-[0_0_10px_rgba(103,232,249,0.9)]"
-        }`}
-      />
-
-      <span
-        className={`text-xs font-medium ${
-          backendError
-            ? "text-rose-300"
-            : "text-cyan-200"
-        }`}
-      >
-        {backendError
-          ? "Backend offline"
-          : providerStatus
-            ? "Backend ready"
-            : "Checking backend"}
-      </span>
-    </div>
-  );
-}
-
-type ModeButtonProps = {
-  active: boolean;
-  disabled?: boolean;
-  onClick: () => void;
-  children: string;
-};
-
-function ModeButton({
-  active,
-  disabled = false,
-  onClick,
-  children,
-}: ModeButtonProps) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      disabled={disabled}
-      aria-pressed={active}
-      className={`rounded-lg px-4 py-3 text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-60 ${
-        active
-          ? "bg-gradient-to-r from-cyan-400 to-violet-500 text-slate-950 shadow-lg shadow-cyan-500/20"
-          : "text-slate-400 hover:bg-white/5 hover:text-white"
-      }`}
-    >
-      {children}
-    </button>
-  );
-}
-
-type FileFieldProps = {
-  label: string;
-  description: string;
-  accept: string;
-  file: File | null;
-  onChange: (file: File | null) => void;
-  disabled?: boolean;
-};
-
-function FileField({
-  label,
-  description,
-  accept,
-  file,
-  onChange,
-  disabled = false,
-}: FileFieldProps) {
-  return (
-    <label className="block rounded-xl border border-white/10 bg-black/20 p-4 transition hover:border-cyan-400/40 hover:bg-white/[0.03]">
-      <span className="block text-sm font-semibold text-slate-100">
-        {label}
-      </span>
-
-      <span className="mt-1 block text-xs leading-5 text-slate-500">
-        {description}
-      </span>
-
-      <input
-        type="file"
-        accept={accept}
-        disabled={disabled}
-        onChange={(event) =>
-          onChange(
-            event.target.files?.[0] ?? null,
-          )
-        }
-        className="mt-4 block w-full text-sm text-slate-400 file:mr-4 file:rounded-lg file:border-0 file:bg-gradient-to-r file:from-cyan-400/15 file:to-violet-500/15 file:px-4 file:py-2 file:text-sm file:font-semibold file:text-cyan-200 hover:file:from-cyan-400/20 hover:file:to-violet-500/20 disabled:cursor-not-allowed disabled:opacity-60"
-      />
-
-      {file && (
-        <span className="mt-3 block truncate rounded-lg border border-emerald-400/10 bg-emerald-400/10 px-3 py-2 text-xs text-emerald-300">
-          Selected: {file.name}
-        </span>
-      )}
-    </label>
-  );
-}
-
-type MetricCardProps = {
-  label: string;
-  value: string;
-  detail: string;
-};
-
-function MetricCard({
-  label,
-  value,
-  detail,
-}: MetricCardProps) {
-  return (
-    <div className="rounded-2xl border border-white/10 bg-white/5 p-5 shadow-lg shadow-black/20 backdrop-blur-xl">
-      <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">
-        {label}
-      </p>
-      <p className="mt-3 text-xl font-semibold text-white">
-        {value}
-      </p>
-      <p className="mt-2 text-sm leading-6 text-slate-400">
-        {detail}
-      </p>
-    </div>
-  );
-}
-
 type AnalysisResultPanelProps = {
   result: AnalysisResult;
   comparison: ComparisonResponse;
@@ -1189,6 +723,22 @@ function AnalysisResultPanel({
       ? result.data.impact_summary
       : null;
 
+  const repositoryMatches =
+    result.mode === "impact"
+      ? result.data.impacts.flatMap((impact) => impact.matches)
+      : [];
+  const directUsages = repositoryMatches.filter(
+    (match) => (match.impact_depth ?? 0) === 0,
+  ).length;
+  const transitiveCallers = repositoryMatches.length - directUsages;
+  const primaryChange = comparison.changes[0];
+  const highestRisk = [...risks].sort((left, right) => right.risk_score - left.risk_score)[0];
+  const resultTitle = primaryChange
+    ? `${primaryChange.method.toUpperCase()} ${primaryChange.path} migration`
+    : "API contract analysis";
+  const resultClassification = comparison.summary.breaking_changes > 0
+    ? "BREAKING"
+    : "NON-BREAKING";
   const [isDownloadingReport, setIsDownloadingReport] =
     useState(false);
   const [isDownloadingPdf, setIsDownloadingPdf] =
@@ -1274,40 +824,48 @@ function AnalysisResultPanel({
       id="analysis-result"
       className="mt-8 scroll-mt-6 rounded-2xl border border-cyan-400/20 bg-white/5 p-6 shadow-xl shadow-cyan-950/20 backdrop-blur-xl"
     >
-      <div className="flex flex-col gap-3 border-b border-white/10 pb-5 md:flex-row md:items-center md:justify-between">
+      <div className="result-header">
         <div>
+          <div className="result-heading-badges">
+            <span className={comparison.summary.breaking_changes > 0 ? "status-badge status-badge-danger" : "status-badge status-badge-success"}>{resultClassification}</span>
+            {highestRisk && (
+              <span className={`status-badge ${highestRisk.risk_level === "low" ? "status-badge-success" : highestRisk.risk_level === "medium" ? "status-badge-warning" : "status-badge-danger"}`}>
+                {highestRisk.risk_level.toUpperCase()} RISK
+              </span>
+            )}
+          </div>
           <p className="text-xs font-semibold uppercase tracking-[0.2em] text-cyan-300">
-            Analysis completed
+            {result.mode === "impact" ? "Repository impact analysis" : "Specification comparison"}
           </p>
-          <h3 className="mt-2 text-xl font-semibold text-white">
-            {result.mode === "impact"
-              ? "Repository impact result"
-              : "Specification comparison result"}
-          </h3>
+          <h1 className="result-title">{resultTitle}</h1>
+          <p className="result-source">
+            <span>{result.mode === "impact" ? "Static repository analysis" : "No repository supplied"}</span>
+            {analysisId && <code>{analysisId}</code>}
+          </p>
         </div>
 
         {analysisId && (
-          <div className="flex max-w-full flex-col gap-2 sm:flex-row sm:items-center">
+          <div className="result-actions">
             <button
               type="button"
               onClick={handleDownloadReport}
               disabled={isDownloadingReport}
-              className="rounded-lg border border-cyan-400/30 bg-cyan-400/10 px-4 py-2 text-sm font-semibold text-cyan-100 transition hover:bg-cyan-400/20 disabled:cursor-not-allowed disabled:opacity-60"
+              className="button-secondary"
             >
               {isDownloadingReport
                 ? "Preparing report..."
-                : "Download JSON report"}
+                : "Download JSON"}
             </button>
 
             <button
               type="button"
               onClick={handleDownloadPdf}
               disabled={isDownloadingPdf}
-              className="rounded-lg border border-violet-400/30 bg-violet-400/10 px-4 py-2 text-sm font-semibold text-violet-100 transition hover:bg-violet-400/20 disabled:cursor-not-allowed disabled:opacity-60"
+              className="button-secondary"
             >
               {isDownloadingPdf
                 ? "Preparing PDF..."
-                : "Download PDF report"}
+                : "Download PDF"}
             </button>
 
             <code className="max-w-full truncate rounded-lg border border-white/10 bg-black/25 px-3 py-2 text-xs text-slate-400">
@@ -1323,42 +881,28 @@ function AnalysisResultPanel({
         </div>
       )}
 
-      <div id="analysis-summary" className="mt-6 scroll-mt-28">
+      <div id="analysis-summary" className="result-summary-label">
         <p className="text-xs font-semibold uppercase tracking-[0.2em] text-cyan-300">
           Summary
         </p>
       </div>
-      <div className="mt-3 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <ResultMetric
-          label="Total changes"
-          value={comparison.summary.total_changes}
-        />
+      <div className="result-metrics">
         <ResultMetric
           label="Breaking changes"
           value={comparison.summary.breaking_changes}
-          danger={
-            comparison.summary.breaking_changes > 0
-          }
+          danger={comparison.summary.breaking_changes > 0}
         />
         <ResultMetric
-          label="Non-breaking"
-          value={
-            comparison.summary.non_breaking_changes
-          }
+          label="Impacted files"
+          value={impactSummary?.impacted_files ?? 0}
         />
         <ResultMetric
-          label={
-            impactSummary
-              ? "Impacted files"
-              : "Duplicate result"
-          }
-          value={
-            impactSummary
-              ? impactSummary.impacted_files
-              : comparison.duplicate
-                ? "Yes"
-                : "No"
-          }
+          label="Direct usages"
+          value={directUsages}
+        />
+        <ResultMetric
+          label="Transitive callers"
+          value={transitiveCallers}
         />
       </div>
 
@@ -1384,7 +928,7 @@ function AnalysisResultPanel({
             Understand what changed and where it propagates
           </h4>
         </div>
-        <div className="space-y-5">
+        <div className="result-change-list">
         {comparison.changes.length === 0 ? (
           <div className="rounded-xl border border-emerald-400/20 bg-emerald-400/10 p-4 text-sm text-emerald-200">
             No API contract changes were detected.
@@ -1632,7 +1176,7 @@ function PatchProposalPanel({
               />
             )}
           </div>
-          <div className="overflow-hidden rounded-lg border border-white/10 bg-slate-950">
+          <div className="patch-diff">
             <div className="border-b border-white/10 px-4 py-3 text-xs text-slate-400">
               Trusted unified diff · {proposal.provider} / {proposal.provider_model}
             </div>
@@ -1735,7 +1279,7 @@ function PatchValidationPanel({
               disabled={isPreviewing}
               className="mt-3 rounded-lg bg-violet-300 px-4 py-2 text-sm font-semibold text-slate-950 transition hover:bg-violet-200 disabled:cursor-wait disabled:opacity-60"
             >
-              {isPreviewing ? "Reverifying source..." : "Create GitHub Pull Request"}
+              {isPreviewing ? "Reverifying source..." : "Preview Pull Request"}
             </button>
           </div>
         )}
@@ -1784,7 +1328,7 @@ function PatchValidationPanel({
                 disabled={isCreating}
                 className="rounded-lg bg-cyan-300 px-4 py-2 text-sm font-semibold text-slate-950 transition hover:bg-cyan-200 disabled:cursor-wait disabled:opacity-60"
               >
-                {isCreating ? "Creating review branch..." : "Confirm Create Pull Request"}
+                {isCreating ? "Creating review branch..." : "Create Pull Request"}
               </button>
               <button
                 type="button"
@@ -1829,8 +1373,9 @@ function PatchValidationPanel({
           </p>
         )}
       </div>
-      <ValidationFindingGroup title="Contract checks" findings={validation.contract_findings} />
-      <ValidationFindingGroup title="Dependency checks" findings={validation.dependency_findings} />
+      <ValidationFindingGroup title="Contract Checks" findings={validation.contract_findings} />
+      <ValidationFindingGroup title="Caller Consistency" findings={validation.dependency_findings.filter((finding) => finding.category !== "patch_scope")} />
+      <ValidationFindingGroup title="Scope Validation" findings={validation.dependency_findings.filter((finding) => finding.category === "patch_scope")} />
       <div>
         <p className="text-sm font-semibold text-slate-100">
           Related tests · {validation.related_tests.length} discovered
@@ -1894,6 +1439,7 @@ function ValidationFindingGroup({
     <div>
       <p className="text-sm font-semibold text-slate-100">{title}</p>
       <div className="mt-2 space-y-2">
+        {findings.length === 0 && <p className="rounded border border-white/10 bg-black/20 p-3 text-xs text-slate-500">No findings returned for this group.</p>}
         {findings.map((finding) => (
           <div key={finding.check_id} className="rounded border border-white/10 bg-black/20 p-3 text-xs">
             <p className={finding.status === "fail" ? "text-rose-200" : finding.status === "pass" ? "text-emerald-200" : "text-amber-200"}>
@@ -1957,8 +1503,8 @@ function ChangeRow({
   migration,
 }: ChangeRowProps) {
   return (
-    <article className="overflow-hidden rounded-xl border border-white/10 bg-black/20">
-      <div className="p-4">
+    <article className="change-card">
+      <div className="change-card-header">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
           <div>
             <div className="flex flex-wrap items-center gap-2">
@@ -1994,13 +1540,25 @@ function ChangeRow({
           </div>
         </div>
       </div>
+        {(change.old_value !== undefined || change.new_value !== undefined) && (
+          <div className="change-before-after">
+            <div className="change-value change-value-before">
+              <span>Before</span>
+              <pre>{formatChangeValue(change.old_value)}</pre>
+            </div>
+            <div className="change-value change-value-after">
+              <span>After</span>
+              <pre>{formatChangeValue(change.new_value)}</pre>
+            </div>
+          </div>
+        )}
 
       {matches !== undefined && (
         <SourceMatchesPanel matches={matches} />
       )}
 
       {(risk || migration) && (
-        <div className="grid gap-px border-t border-white/10 bg-white/10 lg:grid-cols-2">
+        <div className="result-insight-grid">
           {risk && <RiskPanel risk={risk} />}
           {migration && (
             <MigrationPanel migration={migration} />
@@ -2010,6 +1568,13 @@ function ChangeRow({
     </article>
   );
 }
+
+function formatChangeValue(value: unknown) {
+  if (value === undefined) return "Not present";
+  if (typeof value === "string") return value;
+  return JSON.stringify(value, null, 2);
+}
+
 
 function SourceMatchesPanel({
   matches,
@@ -2026,7 +1591,7 @@ function SourceMatchesPanel({
   );
 
   return (
-    <section className="border-t border-white/10 bg-slate-950/70 p-5">
+    <section className="impact-path">
       <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <p className="text-xs font-semibold uppercase tracking-[0.18em] text-emerald-300">
@@ -2050,7 +1615,7 @@ function SourceMatchesPanel({
       </div>
 
       {matches.length > 0 && (
-        <div className="mt-4 grid gap-3 sm:grid-cols-3">
+        <div className="impact-summary-grid">
           <ImpactMetric label="Direct usages" value={directMatches} />
           <ImpactMetric
             label="Transitive callers"
@@ -2065,7 +1630,7 @@ function SourceMatchesPanel({
           {matches.map((match, index) => (
             <article
               key={`${match.file_path}-${match.line}-${match.column}-${index}`}
-              className="rounded-xl border border-white/10 bg-black/30 p-4"
+              className="impact-match"
             >
               <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                 <div className="min-w-0">
@@ -2102,8 +1667,10 @@ function SourceMatchesPanel({
                 </div>
               </div>
 
+              <details className="impact-match-details">
+                <summary>View evidence and dependency trace</summary>
               {(match.trace?.length ?? 0) > 0 && (
-                <div className="mt-4 rounded-lg border border-violet-400/15 bg-violet-400/5 p-3">
+                <div className="impact-trace">
                   <p className="text-xs font-semibold uppercase tracking-wider text-violet-300">
                     Dependency chain
                   </p>
@@ -2111,8 +1678,7 @@ function SourceMatchesPanel({
                     {match.trace?.map((step, stepIndex) => (
                       <div
                         key={`${step.file_path}-${step.line}-${stepIndex}`}
-                        className="flex gap-3 text-xs text-slate-300"
-                        style={{ paddingLeft: `${stepIndex * 14}px` }}
+                        className="impact-trace-step"
                       >
                         <span className="text-violet-300">
                           {stepIndex === 0 ? "●" : "↳"}
@@ -2142,6 +1708,7 @@ function SourceMatchesPanel({
                   <code>{match.evidence}</code>
                 </pre>
               </div>
+              </details>
             </article>
           ))}
         </div>
@@ -2205,20 +1772,11 @@ function RiskPanel({
   const roundedScore = Math.round(risk.risk_score);
 
   return (
-    <section className="bg-slate-950/90 p-5">
+    <section className="risk-panel bg-slate-950/90 p-5">
       <div className="flex items-start justify-between gap-4">
-        <div>
-          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-cyan-300">
-            ML risk prediction
-          </p>
-          <p className="mt-2 text-2xl font-semibold text-white">
-            {roundedScore}
-            <span className="text-sm text-slate-500">
-              /100
-            </span>
-          </p>
-        </div>
-
+        <p className="text-xs font-semibold uppercase tracking-[0.18em] text-cyan-300">
+          Migration Risk
+        </p>
         <span
           className={`rounded-full px-3 py-1 text-xs font-semibold uppercase ${riskLevelClass(
             risk.risk_level,
@@ -2227,17 +1785,15 @@ function RiskPanel({
           {risk.risk_level}
         </span>
       </div>
-
-      <div className="mt-4 h-2 overflow-hidden rounded-full bg-white/10">
-        <div
-          className="h-full rounded-full bg-gradient-to-r from-cyan-400 via-violet-400 to-rose-400"
-          style={{
-            width: `${Math.min(
-              100,
-              Math.max(0, roundedScore),
-            )}%`,
-          }}
-        />
+      <div
+        className="risk-gauge"
+        style={{
+          "--risk-progress": `${Math.min(100, Math.max(0, roundedScore))}%`,
+          color: risk.risk_level === "low" ? "var(--green)" : risk.risk_level === "medium" ? "var(--amber)" : "var(--red)",
+        } as CSSProperties}
+      >
+        <div className="risk-gauge-fill" />
+        <div className="risk-gauge-value"><strong>{roundedScore}</strong><small> / 100</small></div>
       </div>
 
       <p className="mt-3 text-xs text-slate-500">
@@ -2265,10 +1821,8 @@ function RiskPanel({
       )}
 
       {risk.top_drivers.length > 0 && (
-        <div className="mt-5">
-          <h4 className="text-sm font-semibold text-slate-200">
-            Top risk drivers
-          </h4>
+        <details className="risk-driver-details">
+          <summary>Explain top risk drivers</summary>
           <div className="mt-3 space-y-2">
             {risk.top_drivers
               .slice(0, 3)
@@ -2291,7 +1845,7 @@ function RiskPanel({
                 </div>
               ))}
           </div>
-        </div>
+        </details>
       )}
     </section>
   );
