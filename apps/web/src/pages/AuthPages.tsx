@@ -1,21 +1,64 @@
+import type { ReactNode } from "react";
+
 import "../workspace.css";
 import { githubSignInUrl } from "../lib/api";
 
-export function SignInPage() {
+export function SignInPage({
+  signup = false,
+  githubConfigured,
+  developmentContent,
+  googleConfigured,
+  message,
+  onHome,
+  onRetry,
+}: {
+  signup?: boolean;
+  githubConfigured: boolean;
+  developmentContent?: ReactNode;
+  googleConfigured: boolean;
+  message?: string | null;
+  onHome: () => void;
+  onRetry?: () => void;
+}) {
+  const returnTo = window.location.origin + "/app";
   return (
     <main className="auth-page">
       <section className="auth-card">
-        <div className="brand auth-brand">
+        <button type="button" className="brand auth-brand auth-brand-button" onClick={onHome}>
           <span aria-hidden="true" className="brand-mark">DG</span>
           <span><strong>DriftGuard AI</strong><small>API change intelligence</small></span>
+        </button>
+        <p className="page-eyebrow">{signup ? "Create account" : "Welcome back"}</p>
+        <h1>{signup ? "Create your DriftGuard account" : "Sign in to DriftGuard"}</h1>
+        <p>Identity sign-in is separate from the GitHub App permissions used to access repositories.</p>
+        {message && <div role="status" className="inline-alert">{message}</div>}
+        {onRetry && (
+          <button className="button-secondary auth-action" type="button" onClick={onRetry}>
+            Retry connection
+          </button>
+        )}
+        <div className="auth-provider-list">
+          <button
+            className="button-secondary auth-action"
+            type="button"
+            disabled
+            title={googleConfigured ? "Google OAuth is not available in this release." : "Google OAuth is not configured."}
+          >
+            Continue with Google · Not configured
+          </button>
+          {githubConfigured ? (
+            <a className="button-primary auth-action" href={githubSignInUrl(undefined, returnTo)}>
+              Continue with GitHub
+            </a>
+          ) : (
+            <button className="button-primary auth-action" type="button" disabled title="GitHub OAuth credentials are not configured.">
+              Continue with GitHub · Not configured
+            </button>
+          )}
         </div>
-        <p className="page-eyebrow">Team workspaces</p>
-        <h1>Detect breaking API changes before they break production.</h1>
-        <p>Connect your engineering workspace and authorize only the repositories DriftGuard should analyze.</p>
-        <a className="button-primary auth-action" href={githubSignInUrl()}>
-          Continue with GitHub
-        </a>
-        <small>Identity uses GitHub OAuth. Repository access uses the DriftGuard GitHub App—never a personal access token.</small>
+        {developmentContent ?? (
+          <small>Repository authorization happens later through the DriftGuard GitHub App—never a personal access token.</small>
+        )}
       </section>
     </main>
   );

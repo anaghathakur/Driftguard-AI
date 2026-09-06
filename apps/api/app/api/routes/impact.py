@@ -6,6 +6,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, File, Form, UploadFile
 
+from apps.api.app.auth.authorization import Permission, requires
 from apps.api.app.core.config import settings
 from apps.api.app.core.dependencies import (
     get_analysis_pipeline_service,
@@ -24,7 +25,11 @@ from apps.api.app.repository.github_source import (
 from apps.api.app.schemas.impact import ImpactAnalysisResponse
 from apps.api.app.services.analysis_pipeline import AnalysisPipelineService
 
-router = APIRouter(prefix="/impact", tags=["impact"])
+router = APIRouter(
+    prefix="/impact",
+    tags=["impact"],
+    dependencies=[Depends(requires(Permission.RUN_ANALYSES))],
+)
 
 
 async def _read_repository(upload: UploadFile) -> bytes:
@@ -43,15 +48,16 @@ async def _read_repository(upload: UploadFile) -> bytes:
 
 
 async def _read_specification(upload: UploadFile) -> bytes:
-    content = await upload.read(settings.max_spec_file_bytes + 1)
+    maximum = max(settings.max_spec_file_bytes, settings.max_graphql_document_bytes)
+    content = await upload.read(maximum + 1)
     await upload.close()
 
-    if len(content) > settings.max_spec_file_bytes:
+    if len(content) > maximum:
         raise DriftGuardError(
             code="specification_too_large",
-            message="The uploaded OpenAPI file exceeds the configured size limit.",
+            message="The uploaded contract exceeds the configured size limit.",
             status_code=413,
-            details={"max_bytes": settings.max_spec_file_bytes},
+            details={"max_bytes": maximum},
         )
 
     return content
@@ -66,6 +72,7 @@ async def analyze_impact(
         AnalysisPipelineService,
         Depends(get_analysis_pipeline_service),
     ],
+    contract_type: Annotated[str, Form()] = "auto",
 ) -> ImpactAnalysisResponse:
     old_content = await _read_specification(old_spec)
     new_content = await _read_specification(new_spec)
@@ -78,6 +85,7 @@ async def analyze_impact(
         new_content=new_content,
         repository_filename=repository.filename or "",
         repository_content=repository_content,
+        contract_type=contract_type,
     )
 
 
@@ -95,6 +103,7 @@ async def analyze_github_impact(
         Depends(get_github_repository_source),
     ],
     ref: Annotated[str | None, Form()] = None,
+    contract_type: Annotated[str, Form()] = "auto",
 ) -> ImpactAnalysisResponse:
     old_content = await _read_specification(old_spec)
     new_content = await _read_specification(new_spec)
@@ -115,6 +124,7 @@ async def analyze_github_impact(
         repository_url=repository_url,
         repository_ref=archive.ref,
         repository_commit_sha=archive.commit_sha,
+        contract_type=contract_type,
     )
 
 
@@ -136,6 +146,7 @@ async def analyze_connected_impact(
         Depends(get_github_installation_provider),
     ],
     ref: Annotated[str | None, Form()] = None,
+    contract_type: Annotated[str, Form()] = "auto",
 ) -> ImpactAnalysisResponse:
     principal = current_principal()
     connection = onboarding.require_repository(principal, repository_id)
@@ -164,6 +175,7 @@ async def analyze_connected_impact(
         repository_url=connection.html_url,
         repository_ref=archive.ref,
         repository_commit_sha=archive.commit_sha,
+        contract_type=contract_type,
     )
     onboarding.auth.audit(
         principal.workspace_id,

@@ -1,6 +1,9 @@
 import {
+  lazy,
+  Suspense,
   useCallback,
   useEffect,
+  useRef,
   useState,
   type CSSProperties,
 } from "react";
@@ -16,6 +19,7 @@ import {
   generatePatchProposal,
   getAnalyses,
   getAuthStatus,
+  logout,
   getGitHubInstallations,
   githubInstallationStartUrl,
   getAnalysisChanges,
@@ -42,6 +46,7 @@ import {
   type GitHubInstallation,
   type ApiMonitor,
   type ApiChange,
+  type ContractTypeSelection,
   type ComparisonResponse,
   type GitHubPullRequestRecord,
   type ImpactAnalysisResponse,
@@ -62,12 +67,29 @@ import { SystemStatusPage } from "./pages/SystemStatusPage";
 import { NewAnalysisPage } from "./pages/NewAnalysisPage";
 import { AnalysesPage } from "./pages/AnalysesPage";
 import { MonitorsPage } from "./pages/MonitorsPage";
-import { CreateWorkspacePage, SignInPage } from "./pages/AuthPages";
+import {
+  CreateWorkspacePage,
+  SignInPage,
+} from "./pages/AuthPages";
 import { RepositoriesPage } from "./pages/RepositoriesPage";
+import { TeamPage } from "./pages/TeamPage";
+import { LandingPage } from "./pages/LandingPage";
+import { OnboardingPage } from "./pages/OnboardingPage";
+import {
+  authenticationRedirectFor,
+  developmentAuthAllowed,
+} from "./lib/authRouting";
 import "./result.css";
+
+const DevelopmentAuth = import.meta.env.DEV
+  ? lazy(() => import("./pages/DevelopmentAuth"))
+  : null;
 
 type AnalysisMode = "comparison" | "impact";
 type RepositorySourceMode = "upload" | "github" | "connected";
+
+const AUTH_SERVICE_UNREACHABLE =
+  "DriftGuard could not reach the authentication service.";
 
 type AnalysisResult =
   | {
@@ -79,14 +101,27 @@ type AnalysisResult =
       data: ImpactAnalysisResponse;
     };
 
-function App() {
-  const [activePage, setActivePage] = useState<AppPage>("overview");
+type AppProps = {
+  initialAuthStatus?: AuthStatus | null;
+  initialAuthResolved?: boolean;
+};
+
+export function App({
+  initialAuthStatus = null,
+  initialAuthResolved = false,
+}: AppProps = {}) {
+  const [currentPath, setCurrentPath] = useState(window.location.pathname);
+  const [activePage, setActivePage] = useState<AppPage>(() =>
+    pageFromPath(window.location.pathname),
+  );
   const [mode, setMode] =
     useState<AnalysisMode>("comparison");
   const [oldSpec, setOldSpec] =
     useState<File | null>(null);
   const [newSpec, setNewSpec] =
     useState<File | null>(null);
+  const [contractType, setContractType] =
+    useState<ContractTypeSelection>("auto");
   const [repository, setRepository] =
     useState<File | null>(null);
   const [repositorySource, setRepositorySource] =
@@ -129,8 +164,10 @@ function App() {
   const [openingAnalysisId, setOpeningAnalysisId] =
     useState<string | null>(null);
   const [monitors, setMonitors] = useState<ApiMonitor[]>([]);
-const [authStatus, setAuthStatus] = useState<AuthStatus | null>(null);
-  const [isLoadingAuth, setIsLoadingAuth] = useState(true);
+const [authStatus, setAuthStatus] = useState<AuthStatus | null>(initialAuthStatus);
+  const [isLoadingAuth, setIsLoadingAuth] = useState(!initialAuthResolved);
+  const [authError, setAuthError] = useState<string | null>(null);
+  const [authRefreshKey, setAuthRefreshKey] = useState(0);
   const [workspaceName, setWorkspaceName] = useState("");
   const [workspaceBusy, setWorkspaceBusy] = useState(false);
   const [workspaceError, setWorkspaceError] = useState<string | null>(null);
@@ -138,14 +175,21 @@ const [authStatus, setAuthStatus] = useState<AuthStatus | null>(null);
   const [connectedRepositories, setConnectedRepositories] = useState<RepositoryConnection[]>([]);
   const [repositoriesLoading, setRepositoriesLoading] = useState(false);
   const [repositoriesError, setRepositoriesError] = useState<string | null>(null);
+  const activeWorkspaceId =
+    authStatus?.workspace?.id ?? (authStatus?.mode === "local" ? "local" : null);
+  const activeWorkspaceRef = useRef<string | null>(activeWorkspaceId);
+  activeWorkspaceRef.current = activeWorkspaceId;
 
   const loadHistory = useCallback(async () => {
+    const workspaceId = activeWorkspaceRef.current;
     setIsLoadingHistory(true);
     setHistoryError(null);
 
     try {
-      setHistory(await getAnalyses());
+      const items = await getAnalyses();
+      if (activeWorkspaceRef.current === workspaceId) setHistory(items);
     } catch (error) {
+      if (activeWorkspaceRef.current !== workspaceId) return;
       setHistory([]);
       setHistoryError(
         error instanceof Error
@@ -153,12 +197,18 @@ const [authStatus, setAuthStatus] = useState<AuthStatus | null>(null);
           : "Saved analyses could not be loaded.",
       );
     } finally {
-      setIsLoadingHistory(false);
+      if (activeWorkspaceRef.current === workspaceId) setIsLoadingHistory(false);
     }
   }, []);
 
+  const activeRole = authStatus?.workspace?.role ?? "owner";
+  const localMode = authStatus?.mode === "local";
+  const canRunAnalyses = localMode || activeRole !== "viewer";
+  const canManageWorkspaceResources = localMode || activeRole === "owner" || activeRole === "admin";
+
   const canAnalyze =
     !isAnalyzing &&
+    canRunAnalyses &&
     oldSpec !== null &&
     newSpec !== null &&
     (mode === "comparison" ||
@@ -169,8 +219,10 @@ const [authStatus, setAuthStatus] = useState<AuthStatus | null>(null);
           : repositoryUrl.trim().length > 0));
 
   const analysisRequirement =
-    oldSpec === null || newSpec === null
-      ? "Select both OpenAPI files to continue."
+    !canRunAnalyses
+      ? "Your Viewer role can inspect analyses but cannot run a new analysis."
+      : oldSpec === null || newSpec === null
+      ? "Select both contract files to continue."
       : mode === "impact" && repositorySource === "upload" && repository === null
         ? "Select the repository ZIP to continue."
         : mode === "impact" && repositorySource === "connected" && !connectedRepositoryId
@@ -191,33 +243,102 @@ const [authStatus, setAuthStatus] = useState<AuthStatus | null>(null);
         : "Scanning repository and building the dependency graph...";
 
 useEffect(() => {
+    if (initialAuthResolved) return;
     let active = true;
+    setIsLoadingAuth(true);
+    setAuthError(null);
     void getAuthStatus()
-      .then((status) => { if (active) setAuthStatus(status); })
-      .catch(() => { if (active) setAuthStatus(null); })
+      .then((status) => {
+        if (active) {
+          setAuthStatus(status);
+          setAuthError(null);
+        }
+      })
+      .catch(() => {
+        if (active) {
+          setAuthStatus(null);
+          setAuthError(AUTH_SERVICE_UNREACHABLE);
+        }
+      })
       .finally(() => { if (active) setIsLoadingAuth(false); });
     return () => { active = false; };
+  }, [authRefreshKey, initialAuthResolved]);
+
+  useEffect(() => {
+    function handlePopState() {
+      setCurrentPath(window.location.pathname);
+      setActivePage(pageFromPath(window.location.pathname));
+    }
+    window.addEventListener("popstate", handlePopState);
+    return () => window.removeEventListener("popstate", handlePopState);
   }, []);
 
+  useEffect(() => {
+    function handleSessionExpired() {
+      setAuthStatus((status) => status ? {
+        ...status,
+        authenticated: false,
+        user: null,
+        workspace: null,
+        workspaces: [],
+        csrf_token: null,
+      } : status);
+      setAnalysisResult(null);
+      setHistory([]);
+      setMonitors([]);
+      setInstallations([]);
+      setConnectedRepositories([]);
+      setAuthError("Your session expired. Sign in again to continue.");
+      window.history.replaceState({}, "", "/login");
+      setCurrentPath("/login");
+      setActivePage("overview");
+    }
+    window.addEventListener("driftguard:session-expired", handleSessionExpired);
+    return () => window.removeEventListener("driftguard:session-expired", handleSessionExpired);
+  }, []);
+
+  useEffect(() => {
+    const redirect = authenticationRedirectFor(
+      currentPath,
+      authStatus,
+      isLoadingAuth,
+    );
+    if (!redirect || redirect === currentPath) return;
+    window.history.replaceState({}, "", redirect);
+    setCurrentPath(redirect);
+    setActivePage(pageFromPath(redirect));
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }, [authStatus, currentPath, isLoadingAuth]);
+
   const loadRepositories = useCallback(async () => {
+    const workspaceId = activeWorkspaceRef.current;
     setRepositoriesLoading(true);
     setRepositoriesError(null);
     try {
       const [installationItems, repositoryItems] = await Promise.all([
         getGitHubInstallations(), getRepositoryConnections(),
       ]);
-      setInstallations(installationItems);
-      setConnectedRepositories(repositoryItems);
+      if (activeWorkspaceRef.current === workspaceId) {
+        setInstallations(installationItems);
+        setConnectedRepositories(repositoryItems);
+      }
     } catch (error) {
+      if (activeWorkspaceRef.current !== workspaceId) return;
       setRepositoriesError(error instanceof Error ? error.message : "Repositories could not be loaded.");
     } finally {
-      setRepositoriesLoading(false);
+      if (activeWorkspaceRef.current === workspaceId) setRepositoriesLoading(false);
     }
   }, []);
 
-  useEffect(() => {
-    if (authStatus?.mode === "local" || authStatus?.workspace) void loadRepositories();
-  }, [authStatus, loadRepositories]);
+  const loadMonitors = useCallback(async () => {
+    const workspaceId = activeWorkspaceRef.current;
+    try {
+      const items = await getMonitors();
+      if (activeWorkspaceRef.current === workspaceId) setMonitors(items);
+    } catch {
+      if (activeWorkspaceRef.current === workspaceId) setMonitors([]);
+    }
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -251,22 +372,17 @@ useEffect(() => {
   }, []);
 
   useEffect(() => {
+    if (!activeWorkspaceId) {
+      setHistory([]);
+      setMonitors([]);
+      setInstallations([]);
+      setConnectedRepositories([]);
+      return;
+    }
     void loadHistory();
-  }, [loadHistory]);
-
-  useEffect(() => {
-    let active = true;
-    void getMonitors()
-      .then((items) => {
-        if (active) setMonitors(items);
-      })
-      .catch(() => {
-        if (active) setMonitors([]);
-      });
-    return () => {
-      active = false;
-    };
-  }, []);
+    void loadMonitors();
+    void loadRepositories();
+  }, [activeWorkspaceId, loadHistory, loadMonitors, loadRepositories]);
 
   async function loadInsights(
     analysisId: string,
@@ -299,7 +415,7 @@ useEffect(() => {
   async function handleAnalyze() {
     if (!oldSpec || !newSpec) {
       setAnalysisError(
-        "Select both OpenAPI specification files.",
+        "Select both contract files.",
       );
       return;
     }
@@ -346,28 +462,29 @@ useEffect(() => {
         const data = await compareSpecifications(
           oldSpec,
           newSpec,
+          contractType,
         );
 
         setAnalysisResult({
           mode: "comparison",
           data,
         });
-        setActivePage("analysis-result");
+        handleNavigate("analysis-result");
 
         await loadInsights(data.analysis_id);
         void loadHistory();
       } else {
         const data = repositorySource === "upload"
-          ? await analyzeRepositoryImpact(oldSpec, newSpec, repository as File)
+          ? await analyzeRepositoryImpact(oldSpec, newSpec, repository as File, contractType)
           : repositorySource === "connected"
-            ? await analyzeConnectedRepositoryImpact(oldSpec, newSpec, connectedRepositoryId, repositoryRef)
-            : await analyzeGitHubRepositoryImpact(oldSpec, newSpec, repositoryUrl, repositoryRef);
+            ? await analyzeConnectedRepositoryImpact(oldSpec, newSpec, connectedRepositoryId, repositoryRef, contractType)
+            : await analyzeGitHubRepositoryImpact(oldSpec, newSpec, repositoryUrl, repositoryRef, contractType);
 
         setAnalysisResult({
           mode: "impact",
           data,
         });
-        setActivePage("analysis-result");
+        handleNavigate("analysis-result");
 
         await loadInsights(data.analysis_id);
         void loadHistory();
@@ -426,7 +543,7 @@ useEffect(() => {
 
       setRisks(riskData);
       setMigrations(migrationData);
-      setActivePage("analysis-result");
+      handleNavigate("analysis-result");
 
       window.setTimeout(() => {
         document
@@ -476,7 +593,18 @@ useEffect(() => {
     analysisResult?.data.analysis_id ?? null;
 
   function handleNavigate(page: AppPage) {
+    const path = pagePath(page);
+    if (window.location.pathname !== path) window.history.pushState({}, "", path);
+    setCurrentPath(path);
     setActivePage(page);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  function navigateTo(path: string, replace = false) {
+    if (replace) window.history.replaceState({}, "", path);
+    else if (window.location.pathname !== path) window.history.pushState({}, "", path);
+    setCurrentPath(path);
+    setActivePage(pageFromPath(path));
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
@@ -488,13 +616,29 @@ async function handleCreateWorkspace() {
   }
 
   async function handleSwitchWorkspace(workspaceId: string) {
+    activeWorkspaceRef.current = workspaceId;
+    setAnalysisResult(null);
+    setRisks([]);
+    setMigrations([]);
+    setHistory([]);
+    setMonitors([]);
+    setInstallations([]);
+    setConnectedRepositories([]);
+    setConnectedRepositoryId("");
     await switchWorkspace(workspaceId);
     setAuthStatus(await getAuthStatus());
-    setActivePage("overview");
-    void loadHistory();
-    void loadRepositories();
+    handleNavigate("overview");
   }
 
+
+  async function handleLogout() {
+    await logout();
+    setAuthStatus(await getAuthStatus());
+    setAnalysisResult(null);
+    setHistory([]);
+    setMonitors([]);
+    navigateTo("/", true);
+  }
   async function handleConnectDevelopmentInstallation() {
     setRepositoriesLoading(true); setRepositoriesError(null);
     try { await connectGitHubInstallation(1); await loadRepositories(); }
@@ -514,9 +658,74 @@ async function handleCreateWorkspace() {
     catch (error) { setRepositoriesError(error instanceof Error ? error.message : "Repository state could not be updated."); }
   }
 
-  if (isLoadingAuth) return <main className="auth-page"><div className="empty-state">Loading workspace…</div></main>;
-  if (authStatus?.mode === "github" && !authStatus.authenticated) return <SignInPage />;
+  const authenticated = Boolean(authStatus?.authenticated);
+  const developmentAuthEnabled = developmentAuthAllowed(
+    import.meta.env.DEV,
+    authStatus,
+  );
+  const developmentContent = developmentAuthEnabled && DevelopmentAuth
+    ? <Suspense fallback={<small>Loading development identities…</small>}><DevelopmentAuth /></Suspense>
+    : undefined;
+  const authPageProps = {
+    githubConfigured: Boolean(authStatus?.github_auth_configured),
+    googleConfigured: Boolean(authStatus?.google_auth_configured),
+    developmentContent,
+    message: authError,
+    onRetry: authError === AUTH_SERVICE_UNREACHABLE
+      ? () => setAuthRefreshKey((value) => value + 1)
+      : undefined,
+    onHome: () => navigateTo("/"),
+  };
+
+  if (currentPath === "/") {
+    return (
+      <LandingPage
+        authenticated={authenticated}
+        onGetStarted={() => navigateTo("/signup")}
+        onSignIn={() => navigateTo("/login")}
+        onOpenApp={() => navigateTo("/app")}
+      />
+    );
+  }
+  if (isLoadingAuth) {
+    return <main className="auth-page"><div className="empty-state">Loading account…</div></main>;
+  }
+  if (currentPath === "/login" || currentPath === "/signup") {
+    if (authenticated) {
+      return <main className="auth-page"><div role="status" className="empty-state">Opening dashboard…</div></main>;
+    }
+    return <SignInPage {...authPageProps} signup={currentPath === "/signup"} />;
+  }
+  if (currentPath === "/dev/login") {
+    if (developmentAuthEnabled && DevelopmentAuth) {
+      return <Suspense fallback={<main className="auth-page"><div className="empty-state">Loading development identities…</div></main>}><DevelopmentAuth standalone onBack={() => navigateTo("/login")} /></Suspense>;
+    }
+    return <SignInPage {...authPageProps} message="Development identities are unavailable in this environment." />;
+  }
+  if (!currentPath.startsWith("/app")) {
+    return (
+      <LandingPage
+        authenticated={authenticated}
+        onGetStarted={() => navigateTo("/signup")}
+        onSignIn={() => navigateTo("/login")}
+        onOpenApp={() => navigateTo("/app")}
+      />
+    );
+  }
+  if (authStatus?.mode === "github" && !authStatus.authenticated) {
+    return <SignInPage {...authPageProps} message="Sign in to access the DriftGuard application." />;
+  }
   if (authStatus?.mode === "github" && !authStatus.workspace) return <CreateWorkspacePage name={workspaceName} error={workspaceError} busy={workspaceBusy} onNameChange={setWorkspaceName} onSubmit={() => void handleCreateWorkspace()} />;
+  if (currentPath === "/app/onboarding") {
+    return (
+      <OnboardingPage
+        workspaceName={authStatus?.workspace?.name ?? "Your workspace"}
+        onConnectGitHub={() => handleNavigate("repositories")}
+        onAnalyzeSpecification={() => handleNavigate("new-analysis")}
+        onContinue={() => handleNavigate("overview")}
+      />
+    );
+  }
 
   return (
     <AppShell
@@ -528,17 +737,21 @@ async function handleCreateWorkspace() {
       workspaces={authStatus?.workspaces ?? []}
       activeWorkspaceId={authStatus?.workspace?.id}
       onSwitchWorkspace={(id) => void handleSwitchWorkspace(id)}
+      roleLabel={authStatus?.workspace?.role}
+      onLogout={authStatus?.mode === "github" ? () => void handleLogout() : undefined}
     >
       <div id="dashboard" className="scroll-mt-6">
         {activePage === "overview" && (
           <OverviewPage
             analyses={history}
             monitors={monitors}
+            repositories={connectedRepositories}
             isLoading={isLoadingHistory}
             error={historyError}
             openingAnalysisId={openingAnalysisId}
             onNavigateToAnalysis={() => handleNavigate("new-analysis")}
             onNavigateToMonitors={() => handleNavigate("monitors")}
+            onNavigateToRepositories={() => handleNavigate("repositories")}
             onOpenAnalysis={(item) => void handleOpenAnalysis(item)}
           />
         )}
@@ -551,6 +764,8 @@ async function handleCreateWorkspace() {
             newSpec={newSpec}
             setNewSpec={setNewSpec}
             repository={repository}
+            contractType={contractType}
+            setContractType={setContractType}
             setRepository={setRepository}
             repositorySource={repositorySource}
             setRepositorySource={setRepositorySource}
@@ -575,6 +790,7 @@ async function handleCreateWorkspace() {
             result={analysisResult}
             comparison={comparison}
             analysisId={analysisId}
+            canMutate={canRunAnalyses}
             risks={risks}
             migrations={migrations}
             isLoadingInsights={isLoadingInsights}
@@ -587,6 +803,8 @@ async function handleCreateWorkspace() {
             void handleViewAnalysis(monitorAnalysisId)
           }
           onMonitorsChanged={setMonitors}
+          canManage={canManageWorkspaceResources}
+          canCheck={canRunAnalyses}
         />}
 
         {activePage === "analyses" && <AnalysesPage
@@ -606,12 +824,21 @@ async function handleCreateWorkspace() {
           loading={repositoriesLoading}
           error={repositoriesError}
           installUrl={readiness?.checks.github_write_provider === "github_app" ? githubInstallationStartUrl() : null}
-          developmentMode={readiness?.checks.github_write_provider === "mock"}
+          developmentMode={developmentAuthEnabled && readiness?.checks.github_write_provider === "mock"}
+          canManage={canManageWorkspaceResources}
+          canAnalyze={canRunAnalyses}
           onConnectMock={() => void handleConnectDevelopmentInstallation()}
           onSync={(id) => void handleSyncInstallation(id)}
           onToggle={(item) => void handleToggleRepository(item)}
           onAnalyze={(item) => { setMode("impact"); setRepositorySource("connected"); setConnectedRepositoryId(item.id); handleNavigate("new-analysis"); }}
         />}
+        {activePage === "team" && authStatus && (
+          <TeamPage
+            key={authStatus.workspace?.id ?? authStatus.mode}
+            auth={authStatus}
+            onLogout={handleLogout}
+          />
+        )}
         {activePage === "system-status" && (
           <SystemStatusPage
             backendError={backendError}
@@ -703,6 +930,7 @@ type AnalysisResultPanelProps = {
   result: AnalysisResult;
   comparison: ComparisonResponse;
   analysisId: string | null;
+  canMutate: boolean;
   risks: RiskPrediction[];
   migrations: MigrationRecommendation[];
   isLoadingInsights: boolean;
@@ -713,6 +941,7 @@ function AnalysisResultPanel({
   result,
   comparison,
   analysisId,
+  canMutate,
   risks,
   migrations,
   isLoadingInsights,
@@ -734,7 +963,7 @@ function AnalysisResultPanel({
   const primaryChange = comparison.changes[0];
   const highestRisk = [...risks].sort((left, right) => right.risk_score - left.risk_score)[0];
   const resultTitle = primaryChange
-    ? `${primaryChange.method.toUpperCase()} ${primaryChange.path} migration`
+    ? `${primaryChange.operation_identifier || `${primaryChange.method.toUpperCase()} ${primaryChange.path}`.trim()} migration`
     : "API contract analysis";
   const resultClassification = comparison.summary.breaking_changes > 0
     ? "BREAKING"
@@ -835,7 +1064,7 @@ function AnalysisResultPanel({
             )}
           </div>
           <p className="text-xs font-semibold uppercase tracking-[0.2em] text-cyan-300">
-            {result.mode === "impact" ? "Repository impact analysis" : "Specification comparison"}
+            {result.mode === "impact" ? "Repository impact analysis" : "Contract comparison"}
           </p>
           <h1 className="result-title">{resultTitle}</h1>
           <p className="result-source">
@@ -965,7 +1194,7 @@ function AnalysisResultPanel({
       </section>
 
       {result.mode === "impact" && analysisId && (
-        <PatchProposalPanel analysisId={analysisId} />
+        <PatchProposalPanel analysisId={analysisId} canMutate={canMutate} />
       )}
     </section>
   );
@@ -973,8 +1202,10 @@ function AnalysisResultPanel({
 
 function PatchProposalPanel({
   analysisId,
+  canMutate,
 }: {
   analysisId: string;
+  canMutate: boolean;
 }) {
   const [repositoryZip, setRepositoryZip] =
     useState<File | null>(null);
@@ -1020,7 +1251,7 @@ function PatchProposalPanel({
   }, [analysisId]);
 
   async function handleGeneratePatch() {
-    if (isGenerating) return;
+    if (!canMutate || isGenerating) return;
     setIsGenerating(true);
     setPatchError(null);
     try {
@@ -1042,7 +1273,7 @@ function PatchProposalPanel({
   }
 
   async function handleValidatePatch() {
-    if (!proposal || isValidating) return;
+    if (!canMutate || !proposal || isValidating) return;
     setIsValidating(true);
     setValidationError(null);
     try {
@@ -1092,6 +1323,7 @@ function PatchProposalPanel({
             <input
               type="file"
               accept=".zip,application/zip"
+              disabled={!canMutate || isGenerating}
               onChange={(event) =>
                 setRepositoryZip(event.target.files?.[0] ?? null)
               }
@@ -1101,13 +1333,20 @@ function PatchProposalPanel({
           <button
             type="button"
             onClick={() => void handleGeneratePatch()}
-            disabled={isGenerating}
+            disabled={!canMutate || isGenerating}
+            title={!canMutate ? "Viewer access is read-only." : undefined}
             className="rounded-lg bg-violet-400 px-4 py-2 text-sm font-semibold text-slate-950 transition hover:bg-violet-300 disabled:cursor-not-allowed disabled:opacity-60"
           >
             {isGenerating ? "Generating safely..." : "Generate proposed patch"}
           </button>
         </div>
       </div>
+
+      {!canMutate && (
+        <div className="mt-4 rounded-lg border border-amber-400/20 bg-amber-400/10 p-3 text-sm text-amber-100">
+          Your Viewer role can inspect existing proposals and validation results, but cannot generate or validate patches.
+        </div>
+      )}
 
       {patchError && (
         <div role="alert" className="mt-4 rounded-lg border border-rose-400/20 bg-rose-400/10 p-3 text-sm text-rose-100">
@@ -1150,13 +1389,15 @@ function PatchProposalPanel({
                   Patch validation &amp; test intelligence
                 </p>
                 <p className="mt-1 text-xs text-slate-400">
-                  Static validation only. Repository code and tests were not executed.
+                  Runs bounded static checks and executes only allowlisted project commands
+                  when a validation runner is configured.
                 </p>
               </div>
               <button
                 type="button"
                 onClick={() => void handleValidatePatch()}
-                disabled={isValidating}
+                disabled={!canMutate || isValidating}
+                title={!canMutate ? "Viewer access is read-only." : undefined}
                 className="rounded-lg bg-cyan-300 px-4 py-2 text-sm font-semibold text-slate-950 transition hover:bg-cyan-200 disabled:opacity-60"
               >
                 {isValidating ? "Validating statically..." : "Validate patch"}
@@ -1173,6 +1414,7 @@ function PatchProposalPanel({
                 analysisId={analysisId}
                 patchId={proposal.patch_id}
                 validation={validation}
+                canCreatePullRequest={canMutate}
               />
             )}
           </div>
@@ -1208,10 +1450,12 @@ function PatchValidationPanel({
   analysisId,
   patchId,
   validation,
+  canCreatePullRequest,
 }: {
   analysisId: string;
   patchId: string;
   validation: PatchValidationRun;
+  canCreatePullRequest: boolean;
 }) {
   const [preview, setPreview] = useState<PullRequestPreview | null>(null);
   const [pullRequest, setPullRequest] =
@@ -1235,6 +1479,38 @@ function PatchValidationPanel({
           {validation.failed_count} failed · {validation.unknown_count} unknown
         </p>
       </div>
+      {validation.execution && (
+        <div className="rounded-lg border border-white/10 bg-black/20 p-4">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <p className="text-sm font-semibold text-slate-100">Test &amp; build execution</p>
+            <span className="rounded border border-white/15 px-2 py-1 text-[11px] font-semibold uppercase text-slate-300">
+              {validation.execution.status.replaceAll("_", " ")}
+            </span>
+          </div>
+          <p className="mt-2 text-xs leading-5 text-slate-400">
+            {validation.execution.message}
+          </p>
+          {validation.execution.commands.length > 0 && (
+            <div className="mt-3 space-y-2">
+              {validation.execution.commands.map((command) => (
+                <div key={`${command.category}-${command.display_name}`} className="rounded border border-white/10 bg-black/20 p-3 text-xs">
+                  <p className="font-semibold text-slate-200">
+                    {command.display_name} · {command.timed_out ? "timed out" : `exit ${command.exit_code}`}
+                  </p>
+                  <code className="mt-1 block overflow-x-auto whitespace-pre text-slate-500">
+                    {command.argv.join(" ")}
+                  </code>
+                </div>
+              ))}
+            </div>
+          )}
+          <p className="mt-3 text-[11px] text-amber-200">
+            {validation.execution.commands.length > 0
+              ? "Commands ran in a disposable copy; runtime isolation is deployment-dependent."
+              : "Static validation completed, but repository tests were not executed."}
+          </p>
+        </div>
+      )}
       <div className="rounded-lg border border-violet-400/20 bg-violet-400/5 p-4">
         <p className="text-xs font-semibold uppercase tracking-[0.18em] text-violet-300">
           GitHub pull request
@@ -1258,7 +1534,7 @@ function PatchValidationPanel({
             <button
               type="button"
               onClick={() => {
-                if (isPreviewing) return;
+                if (!canCreatePullRequest || isPreviewing) return;
                 setIsPreviewing(true);
                 setPullRequestError(null);
                 void previewPullRequest(
@@ -1276,7 +1552,8 @@ function PatchValidationPanel({
                   })
                   .finally(() => setIsPreviewing(false));
               }}
-              disabled={isPreviewing}
+              disabled={!canCreatePullRequest || isPreviewing}
+              title={!canCreatePullRequest ? "Viewer access is read-only." : undefined}
               className="mt-3 rounded-lg bg-violet-300 px-4 py-2 text-sm font-semibold text-slate-950 transition hover:bg-violet-200 disabled:cursor-wait disabled:opacity-60"
             >
               {isPreviewing ? "Reverifying source..." : "Preview Pull Request"}
@@ -1301,13 +1578,16 @@ function PatchValidationPanel({
                 value={`${preview.files_changed} file · ${preview.edit_count} edits`}
               />
               <ConfirmationItem label="Validation" value="READY FOR REVIEW" />
-              <ConfirmationItem label="Tests" value="Not executed" />
+              <ConfirmationItem
+                label="Tests"
+                value={preview.tests_executed ? "Executed in validation copy" : "Not executed"}
+              />
             </dl>
             <div className="mt-4 flex flex-wrap gap-2">
               <button
                 type="button"
                 onClick={() => {
-                  if (isCreating) return;
+                  if (!canCreatePullRequest || isCreating) return;
                   setIsCreating(true);
                   setPullRequestError(null);
                   void createPullRequest(
@@ -1325,7 +1605,7 @@ function PatchValidationPanel({
                     })
                     .finally(() => setIsCreating(false));
                 }}
-                disabled={isCreating}
+                disabled={!canCreatePullRequest || isCreating}
                 className="rounded-lg bg-cyan-300 px-4 py-2 text-sm font-semibold text-slate-950 transition hover:bg-cyan-200 disabled:cursor-wait disabled:opacity-60"
               >
                 {isCreating ? "Creating review branch..." : "Create Pull Request"}
@@ -1363,7 +1643,9 @@ function PatchValidationPanel({
             )}
             <p className="mt-3 text-xs leading-5 text-slate-300">
               DriftGuard created a review branch and pull request. It did not merge or
-              deploy the change. Repository tests were not executed.
+              deploy the change. {pullRequest.tests_executed
+                ? "Allowlisted validation commands were executed before review."
+                : "Repository tests were not executed."}
             </p>
           </div>
         )}
@@ -1509,10 +1791,10 @@ function ChangeRow({
           <div>
             <div className="flex flex-wrap items-center gap-2">
               <span className="rounded-md bg-cyan-400/10 px-2 py-1 text-xs font-semibold uppercase text-cyan-200">
-                {change.method}
+                {change.contract_type === "graphql" ? "GraphQL" : change.method}
               </span>
               <code className="text-sm text-slate-200">
-                {change.path}
+                {change.operation_identifier || change.path}
               </code>
             </div>
 
@@ -1953,6 +2235,27 @@ function riskLevelClass(
   }
 
   return "bg-emerald-400/15 text-emerald-200";
+}
+
+const APP_PAGE_PATHS: Record<AppPage, string> = {
+  overview: "/app",
+  "new-analysis": "/app/new-analysis",
+  monitors: "/app/monitors",
+  analyses: "/app/analyses",
+  repositories: "/app/repositories",
+  team: "/app/team",
+  "system-status": "/app/system-status",
+  "analysis-result": "/app/analyses/result",
+};
+
+function pagePath(page: AppPage) {
+  return APP_PAGE_PATHS[page];
+}
+
+function pageFromPath(path: string): AppPage {
+  const match = (Object.entries(APP_PAGE_PATHS) as Array<[AppPage, string]>)
+    .find(([page, candidate]) => page !== "analysis-result" && candidate === path);
+  return match?.[0] ?? "overview";
 }
 
 export default App;

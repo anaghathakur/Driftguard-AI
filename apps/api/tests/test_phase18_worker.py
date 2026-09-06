@@ -3,9 +3,14 @@ from __future__ import annotations
 import asyncio
 from datetime import UTC, datetime
 
+from apps.api.app.api.routes.automation import discover_repository_contracts
 from apps.api.app.core.config import settings
 from apps.api.app.core.exceptions import DriftGuardError
-from apps.api.app.core.workspace_context import LOCAL_WORKSPACE_ID
+from apps.api.app.core.workspace_context import (
+    LOCAL_WORKSPACE_ID,
+    WorkspacePrincipal,
+    workspace_scope,
+)
 from apps.api.app.domain.automation import (
     BackgroundJob,
     BackgroundJobStatus,
@@ -13,7 +18,11 @@ from apps.api.app.domain.automation import (
     CheckRunConclusion,
     CheckRunStatus,
 )
-from apps.api.app.domain.workspace import GitHubInstallation, RepositoryConnection
+from apps.api.app.domain.workspace import (
+    GitHubInstallation,
+    RepositoryConnection,
+    WorkspaceRole,
+)
 from apps.api.app.github.automation_provider import MockGitHubAutomationProvider
 from apps.api.app.github.contracts import ContractDiscoveryService
 from apps.api.app.github.worker import AutomationWorker
@@ -115,6 +124,47 @@ def test_provider_pr_job_compares_immutable_snapshots_and_reconciles_check(tmp_p
     assert [name for name, _ in github.calls].count("update_check") == 1
     fetched = [value for name, value in github.calls if name == "fetch_file"]
     assert {value[2] for value in fetched} == {BASE_SHA, HEAD_SHA}
+
+
+def test_manual_repository_discovery_uses_current_immutable_snapshot(tmp_path):
+    automation, workspaces, github, _, installation, connection = _setup(tmp_path)
+    github.refs[(connection.github_repository_id, connection.default_branch)] = HEAD_SHA
+    github.snapshots[(connection.github_repository_id, HEAD_SHA)] = {
+        "openapi.yaml": NEW_SPEC,
+        "src/client.py": b"print('not a contract')\n",
+    }
+
+    class Onboarding:
+        repository = workspaces
+
+        @staticmethod
+        def require_repository(principal, connection_id, *, require_enabled=True):
+            del require_enabled
+            assert principal.workspace_id == LOCAL_WORKSPACE_ID
+            assert connection_id == connection.connection_id
+            return connection
+
+    principal = WorkspacePrincipal(
+        LOCAL_WORKSPACE_ID,
+        "developer-1",
+        role=WorkspaceRole.DEVELOPER,
+    )
+    with workspace_scope(principal):
+        result = asyncio.run(
+            discover_repository_contracts(
+                connection.connection_id,
+                Onboarding(),
+                github,
+                ContractDiscoveryService(automation, github),
+            )
+        )
+
+    assert result["status"] == "completed"
+    assert result["commit_sha"] == HEAD_SHA
+    assert [item["path"] for item in result["contracts"]] == ["openapi.yaml"]
+    stored = automation.list_contracts(LOCAL_WORKSPACE_ID, connection.connection_id)
+    assert len(stored) == 1
+    assert stored[0].last_seen_commit == HEAD_SHA
 
 
 def test_job_survives_repository_recreation(tmp_path):

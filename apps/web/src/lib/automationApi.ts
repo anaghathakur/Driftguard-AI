@@ -2,6 +2,7 @@ import { requestJson } from "./api";
 
 export type AutomationContract = {
   contract_id: string;
+  contract_kind: "openapi" | "graphql";
   path: string;
   title: string;
   version: string;
@@ -45,6 +46,15 @@ export async function getRepositoryAutomation(id: string): Promise<RepositoryAut
 export async function analyzeConnectedRepository(id: string): Promise<{ status: string }> {
   return requestJson<{ status: string }>(
     `/api/v1/github/automation/repositories/${id}/analyze`,
+    { method: "POST" },
+  );
+}
+
+export async function discoverRepositoryContracts(
+  id: string,
+): Promise<{ status: "completed"; commit_sha: string; contracts: AutomationContract[] }> {
+  return requestJson(
+    "/api/v1/github/automation/repositories/" + id + "/discover",
     { method: "POST" },
   );
 }

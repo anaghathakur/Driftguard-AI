@@ -21,6 +21,23 @@ class Severity(StrEnum):
     CRITICAL = "critical"
 
 
+class ContractType(StrEnum):
+    OPENAPI = "openapi"
+    GRAPHQL = "graphql"
+
+
+class OperationKind(StrEnum):
+    HTTP_OPERATION = "http_operation"
+    QUERY = "query"
+    MUTATION = "mutation"
+    SUBSCRIPTION = "subscription"
+    OBJECT_FIELD = "object_field"
+    INTERFACE_FIELD = "interface_field"
+    INPUT_FIELD = "input_field"
+    ENUM = "enum"
+    TYPE = "type"
+
+
 class ChangeType(StrEnum):
     ENDPOINT_ADDED = "endpoint_added"
     ENDPOINT_REMOVED = "endpoint_removed"
@@ -46,13 +63,27 @@ class ChangeType(StrEnum):
     ENUM_VALUE_ADDED = "enum_value_added"
     ENUM_VALUE_REMOVED = "enum_value_removed"
     DESCRIPTION_ONLY = "description_only"
+    TYPE_ADDED = "type_added"
+    TYPE_REMOVED = "type_removed"
+    FIELD_ADDED = "field_added"
+    FIELD_REMOVED = "field_removed"
+    INPUT_FIELD_ADDED = "input_field_added"
+    REQUIRED_INPUT_FIELD_ADDED = "required_input_field_added"
+    INPUT_FIELD_REMOVED = "input_field_removed"
+    ARGUMENT_ADDED = "argument_added"
+    REQUIRED_ARGUMENT_ADDED = "required_argument_added"
+    ARGUMENT_REMOVED = "argument_removed"
+    GRAPHQL_INPUT_TYPE_CHANGED = "graphql_input_type_changed"
+    GRAPHQL_RETURN_TYPE_CHANGED = "graphql_return_type_changed"
+    NULLABILITY_TIGHTENED = "nullability_tightened"
+    NULLABILITY_RELAXED = "nullability_relaxed"
 
 
 class ApiChange(BaseModel):
     change_id: str
     change_type: ChangeType
-    path: str
-    method: str
+    path: str = ""
+    method: str = ""
     subject: str | None = None
     old_value: Any = None
     new_value: Any = None
@@ -60,6 +91,15 @@ class ApiChange(BaseModel):
     category: ChangeCategory
     severity: Severity
     explanation: str
+    contract_type: ContractType = ContractType.OPENAPI
+    operation_kind: OperationKind = OperationKind.HTTP_OPERATION
+    operation_identifier: str | None = None
+    contract_location: str | None = None
+    old_type: str | None = None
+    new_type: str | None = None
+    old_required: bool | None = None
+    new_required: bool | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class ComparisonSummary(BaseModel):
@@ -72,9 +112,12 @@ class ComparisonSummary(BaseModel):
 class ContractMetadata(BaseModel):
     title: str
     version: str
-    openapi_version: str
+    openapi_version: str | None = None
     sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
     operation_count: int
+
+    contract_type: ContractType = ContractType.OPENAPI
+    schema_version: str | None = None
 
 
 class ComparisonResponse(BaseModel):

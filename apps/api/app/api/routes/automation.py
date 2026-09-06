@@ -11,8 +11,11 @@ from uuid import uuid4
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
 
+from apps.api.app.auth.authorization import Permission, authorize, requires
+from apps.api.app.contracts.registry import default_contract_registry
 from apps.api.app.core.dependencies import (
     get_automation_repository,
+    get_contract_discovery_service,
     get_github_automation_provider,
     get_github_onboarding_service,
 )
@@ -27,15 +30,19 @@ from apps.api.app.domain.automation import (
     RepositoryContract,
 )
 from apps.api.app.github.automation_provider import GitHubAutomationProvider
-from apps.api.app.github.contracts import is_contract_candidate
+from apps.api.app.github.contracts import ContractDiscoveryService, is_contract_candidate
 from apps.api.app.github.service import GitHubOnboardingService
-from apps.api.app.openapi.parser import parse_openapi_document
 from apps.api.app.ports.automation_repository import AutomationRepository
 
-router = APIRouter(prefix="/github/automation", tags=["GitHub automation"])
+router = APIRouter(
+    prefix="/github/automation",
+    tags=["GitHub automation"],
+    dependencies=[Depends(requires(Permission.READ_REPOSITORIES))],
+)
 Automation = Annotated[AutomationRepository, Depends(get_automation_repository)]
 Onboarding = Annotated[GitHubOnboardingService, Depends(get_github_onboarding_service)]
 Provider = Annotated[GitHubAutomationProvider, Depends(get_github_automation_provider)]
+Discovery = Annotated[ContractDiscoveryService, Depends(get_contract_discovery_service)]
 
 
 class ContractPathRequest(BaseModel):
@@ -103,6 +110,7 @@ async def analyze_repository(
     provider: Provider,
 ) -> dict[str, object]:
     principal = current_principal()
+    authorize(Permission.RUN_ANALYSES)
     connection = onboarding.require_repository(principal, connection_id)
     installation = onboarding.repository.get_installation(connection.installation_id)
     if installation is None or installation.revoked_at:
@@ -136,6 +144,36 @@ async def analyze_repository(
     return {"status": "queued", "job": _serialize(job)}
 
 
+@router.post("/repositories/{connection_id}/discover")
+async def discover_repository_contracts(
+    connection_id: str,
+    onboarding: Onboarding,
+    provider: Provider,
+    discovery: Discovery,
+) -> dict[str, object]:
+    principal = current_principal()
+    authorize(Permission.RUN_ANALYSES)
+    connection = onboarding.require_repository(principal, connection_id)
+    installation = onboarding.repository.get_installation(connection.installation_id)
+    if installation is None or installation.revoked_at:
+        raise DriftGuardError(
+            code="github_installation_revoked",
+            message="Reconnect the GitHub App installation before discovering contracts.",
+            status_code=409,
+        )
+    commit_sha = await provider.resolve_commit(
+        installation.github_installation_id,
+        connection,
+        connection.default_branch,
+    )
+    contracts = await discovery.discover(installation, connection, commit_sha)
+    return {
+        "status": "completed",
+        "commit_sha": commit_sha,
+        "contracts": [_serialize(item) for item in contracts],
+    }
+
+
 @router.post("/repositories/{connection_id}/contracts", status_code=201)
 async def configure_contract(
     connection_id: str,
@@ -145,6 +183,7 @@ async def configure_contract(
     provider: Provider,
 ) -> dict[str, object]:
     principal = current_principal()
+    authorize(Permission.MANAGE_REPOSITORIES)
     connection = onboarding.require_repository(principal, connection_id)
     path = _safe_contract_path(request.path)
     installation = onboarding.repository.get_installation(connection.installation_id)
@@ -167,7 +206,8 @@ async def configure_contract(
     content = await provider.fetch_file(
         installation.github_installation_id, connection, path, commit_sha
     )
-    document = parse_openapi_document(path, content)
+    adapter = default_contract_registry.resolve(path, content)
+    document = adapter.parse(path, content)
     now = datetime.now(UTC)
     existing = next(
         (
@@ -183,9 +223,9 @@ async def configure_contract(
             principal.workspace_id,
             connection_id,
             path,
-            ContractKind.OPENAPI,
-            str(document["info"]["title"]),
-            str(document["openapi"]),
+            ContractKind(adapter.contract_type.value),
+            str(document.title),
+            str(document.version),
             existing.discovered_at if existing else now,
             now,
             commit_sha,
@@ -205,6 +245,7 @@ def set_contract_enabled(
     onboarding: Onboarding,
 ) -> dict[str, object]:
     principal = current_principal()
+    authorize(Permission.MANAGE_REPOSITORIES)
     onboarding.require_repository(principal, connection_id, require_enabled=False)
     contract = automation.get_contract(contract_id)
     if (
@@ -232,6 +273,7 @@ def confirm_dependency(
     onboarding: Onboarding,
 ) -> dict[str, object]:
     principal = current_principal()
+    authorize(Permission.MANAGE_REPOSITORIES)
     onboarding.require_repository(principal, connection_id)
     if not request.contract_id and not request.monitor_id:
         raise DriftGuardError(

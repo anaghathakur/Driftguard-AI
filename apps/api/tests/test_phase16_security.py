@@ -161,7 +161,9 @@ def test_private_repository_fetch_requires_provider_authorization() -> None:
 def test_repository_sync_tracks_rename_and_revoked_installation(tmp_path) -> None:
     repository, auth = _auth(tmp_path)
     user, workspace = _workspace(repository)
-    principal = WorkspacePrincipal(workspace.workspace_id, user.user_id, user.github_login)
+    principal = WorkspacePrincipal(
+        workspace.workspace_id, user.user_id, user.github_login, role=WorkspaceRole.OWNER
+    )
     provider = MockGitHubInstallationProvider()
     provider.repositories[1] = [
         GitHubRepositoryInfo(

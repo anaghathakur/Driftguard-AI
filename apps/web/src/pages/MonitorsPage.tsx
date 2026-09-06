@@ -6,9 +6,13 @@ import type { ApiMonitor } from "../lib/api";
 export function MonitorsPage({
   onViewAnalysis,
   onMonitorsChanged,
+  canManage,
+  canCheck,
 }: {
   onViewAnalysis: (analysisId: string) => void;
   onMonitorsChanged: (monitors: ApiMonitor[]) => void;
+  canManage: boolean;
+  canCheck: boolean;
 }) {
   return (
     <section>
@@ -19,7 +23,8 @@ export function MonitorsPage({
           <p className="page-subtitle">Monitor API contracts and automatically detect drift.</p>
         </div>
       </header>
-      <MonitorPanel onViewAnalysis={onViewAnalysis} onMonitorsChanged={onMonitorsChanged} />
+      <MonitorPanel onViewAnalysis={onViewAnalysis} onMonitorsChanged={onMonitorsChanged} canManage={canManage} canCheck={canCheck} />
+      {(!canManage || !canCheck) && <div className="inline-alert">Your {canCheck ? "Developer" : "Viewer"} permissions are enforced by the API. Some monitor actions may be unavailable.</div>}
     </section>
   );
 }

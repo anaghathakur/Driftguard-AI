@@ -1,33 +1,43 @@
 import { MetricCard } from "../components/MetricCard";
 import { StatusBadge } from "../components/StatusBadge";
 import { WorkflowSteps } from "../components/WorkflowSteps";
-import type { AnalysisHistoryItem, ApiMonitor } from "../lib/api";
+import type {
+  AnalysisHistoryItem,
+  ApiMonitor,
+  RepositoryConnection,
+} from "../lib/api";
 
 type OverviewPageProps = {
   analyses: AnalysisHistoryItem[];
   monitors: ApiMonitor[];
+  repositories: RepositoryConnection[];
   isLoading: boolean;
   error: string | null;
   openingAnalysisId: string | null;
   onNavigateToAnalysis: () => void;
   onNavigateToMonitors: () => void;
+  onNavigateToRepositories: () => void;
   onOpenAnalysis: (item: AnalysisHistoryItem) => void;
 };
 
 export function OverviewPage({
   analyses,
   monitors,
+  repositories,
   isLoading,
   error,
   openingAnalysisId,
   onNavigateToAnalysis,
   onNavigateToMonitors,
+  onNavigateToRepositories,
   onOpenAnalysis,
 }: OverviewPageProps) {
   const recent = analyses.slice(0, 6);
   const activeMonitors = monitors.filter((monitor) => monitor.enabled).length;
   const detectedChanges = analyses.reduce((sum, item) => sum + item.total_changes, 0);
-  const repositoryMatches = analyses.reduce((sum, item) => sum + item.total_matches, 0);
+  const connectedRepositories = repositories.filter(
+    (repository) => repository.enabled && !repository.removed,
+  ).length;
 
   return (
     <div className="overview-page">
@@ -49,7 +59,7 @@ export function OverviewPage({
         <MetricCard label="Saved analyses" value={analyses.length} detail="Persisted analysis records" />
         <MetricCard label="Active monitors" value={activeMonitors} detail={`${monitors.length} configured`} tone={activeMonitors > 0 ? "success" : "default"} />
         <MetricCard label="Detected changes" value={detectedChanges} detail="Across saved analyses" tone={detectedChanges > 0 ? "warning" : "default"} />
-        <MetricCard label="Repository matches" value={repositoryMatches} detail="Direct and transitive source matches" />
+        <MetricCard label="Connected repositories" value={connectedRepositories} detail={repositories.length + " authorized"} />
       </section>
 
       <section className="panel overview-activity">
@@ -66,7 +76,11 @@ export function OverviewPage({
         {!error && !isLoading && recent.length === 0 && (
           <div className="empty-state">
             <strong>No analyses yet</strong>
-            <span>Run a specification comparison or repository impact analysis to populate this workspace.</span>
+            <span>Connect a repository or compare real contract versions to create your first result.</span>
+            <div className="empty-state-actions">
+              <button type="button" className="button-primary" onClick={onNavigateToAnalysis}>Run first analysis</button>
+              <button type="button" className="button-secondary" onClick={onNavigateToRepositories}>Connect repository</button>
+            </div>
           </div>
         )}
 

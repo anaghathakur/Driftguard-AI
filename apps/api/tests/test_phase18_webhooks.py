@@ -86,6 +86,27 @@ def test_valid_signature_queues_contract_push_and_duplicate_is_idempotent(tmp_pa
     assert jobs[0].job_type is BackgroundJobType.GITHUB_PUSH_SCAN
 
 
+def test_webhook_payload_cannot_select_an_arbitrary_workspace(tmp_path):
+    automation, workspaces, _, _ = _services(tmp_path)
+    service = GitHubWebhookService(automation, workspaces, secret=SECRET)
+    payload = json.loads(_push("openapi.yaml"))
+    payload["workspace_id"] = "attacker-workspace"
+    payload["organization_id"] = "attacker-workspace"
+    body = json.dumps(payload, separators=(",", ":")).encode()
+
+    status, result = service.accept(
+        raw_body=body,
+        signature=_headers(body)["X-Hub-Signature-256"],
+        event_type="push",
+        github_delivery_id="spoofed-workspace",
+    )
+
+    assert status == 202
+    assert result["status"] == "queued"
+    assert len(automation.list_jobs(LOCAL_WORKSPACE_ID)) == 1
+    assert automation.list_jobs("attacker-workspace") == []
+
+
 def test_missing_invalid_and_tampered_signatures_are_rejected_before_persistence(tmp_path):
     automation, workspaces, _, _ = _services(tmp_path)
     service = GitHubWebhookService(automation, workspaces, secret=SECRET)

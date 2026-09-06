@@ -93,7 +93,7 @@ class AutomationWorker:
 
     async def _process(self, job: BackgroundJob, now: datetime) -> None:
         try:
-            with workspace_scope(WorkspacePrincipal(job.workspace_id)):
+            with workspace_scope(WorkspacePrincipal(job.workspace_id, system=True)):
                 await self._handler(job)(job)
         except Exception as exc:
             error = _safe_error(exc)
@@ -142,7 +142,7 @@ class AutomationWorker:
 
     async def _sync(self, job: BackgroundJob) -> None:
         installation = self._installation(job)
-        principal = WorkspacePrincipal(job.workspace_id)
+        principal = WorkspacePrincipal(job.workspace_id, system=True)
         repositories = await self.onboarding.sync(principal, installation.installation_id)
         for connection in repositories:
             if connection.installation_id != installation.installation_id or not connection.enabled:
@@ -171,7 +171,7 @@ class AutomationWorker:
             logical_key,
             head_sha,
             CheckRunStatus.IN_PROGRESS,
-            "Analyzing OpenAPI compatibility…",
+            "Analyzing contract compatibility…",
         )
         paths = await self.provider.changed_paths(
             installation.github_installation_id, connection, base_sha, head_sha
@@ -390,8 +390,10 @@ def _check_summary(
     breaking = sum(item.summary.breaking_changes for item in comparisons)
     potential = sum(item.summary.potentially_breaking_changes for item in comparisons)
     non_breaking = sum(item.summary.non_breaking_changes for item in comparisons)
+    contract_types = sorted({item.new_contract.contract_type.value.title() for item in comparisons})
     lines = [
         "DriftGuard API Compatibility",
+        f"Contract type: {', '.join(contract_types) if contract_types else 'None detected'}",
         f"Breaking changes: {breaking}",
         f"Potentially breaking changes: {potential}",
         f"Non-breaking changes: {non_breaking}",
@@ -399,9 +401,10 @@ def _check_summary(
     changes = [change for item in comparisons for change in item.changes]
     for change in changes[:10]:
         prefix = "✗" if change.category is ChangeCategory.BREAKING else "⚠"
-        lines.append(f"{prefix} {change.method} {change.path}: {change.explanation}")
+        operation = change.operation_identifier or f"{change.method} {change.path}".strip()
+        lines.append(f"{prefix} {operation or 'Contract change'}: {change.explanation}")
     if not comparisons:
-        lines.append("No changed, valid OpenAPI contract was detected in this pull request.")
+        lines.append("No changed, valid supported contract was detected in this pull request.")
     if breaking:
         conclusion = CheckRunConclusion.ACTION_REQUIRED
     elif potential:

@@ -48,11 +48,48 @@ class TestRelevance(StrEnum):
 class TestPlanProviderName(StrEnum):
     MOCK = "mock"
     GEMINI = "gemini"
+    DETERMINISTIC = "deterministic"
 
 
 class TestPlanProviderMode(StrEnum):
     DETERMINISTIC_MOCK = "deterministic_mock"
+    DETERMINISTIC = "deterministic"
     EXTERNAL = "external"
+
+
+class ValidationExecutionStatus(StrEnum):
+    PASSED = "passed"
+    FAILED = "failed"
+    PARTIAL = "partial"
+    NOT_CONFIGURED = "not_configured"
+    BLOCKED = "blocked"
+
+
+class ValidationCommandResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    category: str = Field(min_length=1, max_length=30)
+    display_name: str = Field(min_length=1, max_length=120)
+    argv: list[str] = Field(min_length=1, max_length=12)
+    exit_code: int | None = None
+    timed_out: bool = False
+    duration_ms: int = Field(ge=0)
+    stdout_summary: str = Field(default="", max_length=20_000)
+    stderr_summary: str = Field(default="", max_length=20_000)
+    output_truncated: bool = False
+
+
+class ValidationExecution(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    status: ValidationExecutionStatus
+    ecosystem: str | None = Field(default=None, max_length=30)
+    commands: list[ValidationCommandResult] = Field(default_factory=list, max_length=8)
+    checks: list[str] = Field(default_factory=list, max_length=20)
+    duration_ms: int = Field(default=0, ge=0)
+    isolated_temporary_copy: bool = False
+    original_repository_unchanged: bool = True
+    message: str = Field(min_length=1, max_length=500)
 
 
 class TestType(StrEnum):
@@ -154,6 +191,7 @@ class PatchValidationRun(BaseModel):
     direct_impacted_files: list[str] = Field(default_factory=list, max_length=100)
     transitive_impacted_files: list[str] = Field(default_factory=list, max_length=100)
     unrelated_modified_files: list[str] = Field(default_factory=list, max_length=50)
+    execution: ValidationExecution | None = None
     static_only: bool = True
 
 

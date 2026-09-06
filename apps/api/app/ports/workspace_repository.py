@@ -13,6 +13,7 @@ from apps.api.app.domain.workspace import (
     User,
     Workspace,
     WorkspaceMembership,
+    WorkspaceRole,
 )
 
 
@@ -33,10 +34,31 @@ class WorkspaceRepository(ABC):
     def create_workspace(self, workspace: Workspace, membership: WorkspaceMembership) -> None: ...
 
     @abstractmethod
+    def ensure_workspace(
+        self, workspace: Workspace, membership: WorkspaceMembership
+    ) -> bool: ...
+
+    @abstractmethod
     def get_workspace(self, workspace_id: str) -> Workspace | None: ...
 
     @abstractmethod
     def list_memberships(self, user_id: str) -> list[tuple[WorkspaceMembership, Workspace]]: ...
+    @abstractmethod
+    def list_workspace_members(
+        self, workspace_id: str
+    ) -> list[tuple[WorkspaceMembership, User]]: ...
+
+    @abstractmethod
+    def save_membership(self, membership: WorkspaceMembership) -> WorkspaceMembership: ...
+
+    @abstractmethod
+    def delete_membership(self, user_id: str, workspace_id: str) -> bool: ...
+
+    @abstractmethod
+    def count_members_by_role(self, workspace_id: str, role: WorkspaceRole) -> int: ...
+
+    @abstractmethod
+    def get_user_by_external_identity(self, provider: str, subject: str) -> User | None: ...
 
     @abstractmethod
     def get_membership(self, user_id: str, workspace_id: str) -> WorkspaceMembership | None: ...

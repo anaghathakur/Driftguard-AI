@@ -1,4 +1,4 @@
-"""Replaceable mock and Gemini migration recommendation providers."""
+"""Deterministic and optional external migration recommendation providers."""
 
 from __future__ import annotations
 
@@ -85,11 +85,11 @@ class MigrationRecommendationProvider(ABC):
         return None
 
 
-class MockMigrationRecommendationProvider(MigrationRecommendationProvider):
-    """Offline deterministic provider used by default."""
+class DeterministicMigrationRecommendationProvider(MigrationRecommendationProvider):
+    """Auditable rules-based migration planning that requires no external model."""
 
-    name = MigrationProvider.MOCK
-    model_name = "deterministic-mock-v1"
+    name = MigrationProvider.DETERMINISTIC
+    model_name = "deterministic-migration-v1"
 
     def generate(
         self,
@@ -99,6 +99,13 @@ class MockMigrationRecommendationProvider(MigrationRecommendationProvider):
         del prompt
 
         return deterministic_recommendation(context)
+
+
+class MockMigrationRecommendationProvider(DeterministicMigrationRecommendationProvider):
+    """Explicit development-only compatibility provider."""
+
+    name = MigrationProvider.MOCK
+    model_name = "development-mock-migration-v1"
 
 
 class GeminiMigrationRecommendationProvider(MigrationRecommendationProvider):

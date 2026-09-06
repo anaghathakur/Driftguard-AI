@@ -20,26 +20,46 @@ class GitHubIdentity:
 
 class GitHubOAuthProvider(ABC):
     @abstractmethod
-    def authorization_url(self, state: str, callback_url: str) -> str: ...
+    def authorization_url(
+        self,
+        state: str,
+        callback_url: str,
+        identity_hint: str | None = None,
+    ) -> str: ...
 
     @abstractmethod
     async def resolve_identity(self, code: str, callback_url: str) -> GitHubIdentity: ...
 
 
 class MockGitHubOAuthProvider(GitHubOAuthProvider):
-    def authorization_url(self, state: str, callback_url: str) -> str:
+    def authorization_url(
+        self,
+        state: str,
+        callback_url: str,
+        identity_hint: str | None = None,
+    ) -> str:
         del callback_url
-        return f"/api/v1/auth/github/callback?code=mock-user&state={state}"
+        code = "mock-user-secondary" if identity_hint == "secondary" else "mock-user"
+        return f"/api/v1/auth/github/callback?code={code}&state={state}"
 
     async def resolve_identity(self, code: str, callback_url: str) -> GitHubIdentity:
         del callback_url
-        if code != "mock-user":
+        identities = {
+            "mock-user": GitHubIdentity(
+                1, "driftguard-dev", "DriftGuard Developer", None
+            ),
+            "mock-user-secondary": GitHubIdentity(
+                2, "driftguard-reviewer", "DriftGuard Reviewer", None
+            ),
+        }
+        identity = identities.get(code)
+        if identity is None:
             raise DriftGuardError(
                 code="github_oauth_failed",
                 message="The development GitHub identity could not be verified.",
                 status_code=401,
             )
-        return GitHubIdentity(1, "driftguard-dev", "DriftGuard Developer", None)
+        return identity
 
 
 class RealGitHubOAuthProvider(GitHubOAuthProvider):
@@ -48,7 +68,13 @@ class RealGitHubOAuthProvider(GitHubOAuthProvider):
         self.client_secret = client_secret
         self.timeout_seconds = timeout_seconds
 
-    def authorization_url(self, state: str, callback_url: str) -> str:
+    def authorization_url(
+        self,
+        state: str,
+        callback_url: str,
+        identity_hint: str | None = None,
+    ) -> str:
+        del identity_hint
         from urllib.parse import urlencode
 
         return "https://github.com/login/oauth/authorize?" + urlencode(

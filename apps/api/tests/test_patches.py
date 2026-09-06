@@ -14,7 +14,11 @@ from apps.api.app.domain.repository import RepositoryScan, ScannedSourceFile
 from apps.api.app.infrastructure.firestore_analysis_repository import (
     FirestoreAnalysisRepository,
 )
-from apps.api.app.patches.context import PatchGenerationContext, build_patch_prompt
+from apps.api.app.patches.context import (
+    PatchGenerationContext,
+    build_patch_prompt,
+    scope_patch_context,
+)
 from apps.api.app.patches.provider import (
     GeminiPatchGenerationProvider,
     MockPatchGenerationProvider,
@@ -161,6 +165,11 @@ def test_python_patch_api_snapshot_idempotency_persistence_reports_and_delete(
     assert "demo/order_service.py" not in proposal["unified_diff"]
     assert '"email": email,' in proposal["unified_diff"]
     assert '"customer_id": customer_id,' in proposal["unified_diff"]
+    assert any(
+        "possible replacement" in edit["reason"].lower()
+        for patch_file in proposal["files"]
+        for edit in patch_file["edits"]
+    )
     assert all(value is True for key, value in proposal["validation"].items() if key != "warnings")
 
     repeated = client.post(
@@ -509,6 +518,85 @@ def test_context_is_bounded_redacted_and_keeps_hostile_comments_as_data(
     assert "checkout.py" not in prompt.user_prompt
     assert prompt.redactions_applied >= 1
     assert any("instruction-like" in warning for warning in prompt.warnings)
+
+
+def test_patch_context_scopes_large_analysis_to_matched_operation(
+    client, analysis_repository, base_spec, clone
+):
+    old, new = patch_specs(base_spec, clone)
+    analysis_id = create_zip_analysis(client, old, new, PYTHON_FILES)
+    scan = RepositoryArchiveScanner().scan(
+        "repository.zip", archive_bytes(PYTHON_FILES)
+    )
+    changes = tuple(analysis_repository.get_changes(analysis_id))
+    migrations = tuple(
+        analysis_repository.get_migration_recommendations(analysis_id)
+    )
+    risks = tuple(analysis_repository.get_risk_predictions(analysis_id))
+    matches = tuple(
+        PersistedMatchResponse.model_validate(
+            {
+                "change_id": item.change_id,
+                "file_path": item.file_path,
+                "line": item.line,
+                "column": item.column,
+                "match_kind": item.match_kind,
+                "confidence": item.confidence,
+                "evidence": item.evidence,
+                "symbol": item.symbol,
+                "language": item.language,
+                "impact_depth": item.impact_depth,
+                "analysis_kind": item.analysis_kind,
+                "trace": item.trace,
+            }
+        )
+        for item in analysis_repository.get_matches(analysis_id)
+    )
+    matched_change_id = matches[0].change_id
+    operation_matches = tuple(
+        match for match in matches if match.change_id == matched_change_id
+    )
+    irrelevant_changes = tuple(
+        changes[0].model_copy(
+            update={
+                "change_id": f"irrelevant-{index}",
+                "path": f"/irrelevant/{index}",
+            }
+        )
+        for index in range(100)
+    )
+    irrelevant_migrations = tuple(
+        migrations[0].model_copy(update={"change_id": change.change_id})
+        for change in irrelevant_changes
+    )
+    irrelevant_risks = tuple(
+        risks[0].model_copy(update={"change_id": change.change_id})
+        for change in irrelevant_changes
+    )
+    context = PatchGenerationContext(
+        analysis_id=analysis_id,
+        changes=(*changes, *irrelevant_changes),
+        matches=operation_matches,
+        migrations=(*migrations, *irrelevant_migrations),
+        risks=(*risks, *irrelevant_risks),
+        source_files=scan.files,
+        allowed_files=(operation_matches[0].file_path,),
+    )
+
+    with pytest.raises(ValueError, match="patch context exceeds configured limit"):
+        build_patch_prompt(context, max_context_bytes=40_000)
+
+    scoped = scope_patch_context(context)
+    relevant_change_ids = {change.change_id for change in scoped.changes}
+    assert matched_change_id in relevant_change_ids
+    assert {change.change_id for change in changes} <= relevant_change_ids
+    assert not relevant_change_ids.intersection(
+        change.change_id for change in irrelevant_changes
+    )
+    assert {item.change_id for item in scoped.migrations} == relevant_change_ids
+    assert {item.change_id for item in scoped.risks} == relevant_change_ids
+    prompt = build_patch_prompt(scoped, max_context_bytes=40_000)
+    assert len(prompt.user_prompt.encode("utf-8")) <= 40_000
 
 
 def test_gemini_provider_validates_structured_output():

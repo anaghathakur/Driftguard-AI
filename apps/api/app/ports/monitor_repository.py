@@ -5,6 +5,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from datetime import datetime
 
+from apps.api.app.core.workspace_context import current_workspace_id
 from apps.api.app.domain.monitor import ApiMonitor, MonitorCheckRecord
 
 
@@ -32,6 +33,11 @@ class ApiMonitorRepository(ABC):
     @abstractmethod
     def list_due(self, now: datetime) -> list[ApiMonitor]:
         """Return enabled monitors whose interval has elapsed."""
+
+    def list_due_all(self, now: datetime) -> list[tuple[str, ApiMonitor]]:
+        """Return due monitors paired with their trusted persisted workspace."""
+
+        return [(current_workspace_id(), monitor) for monitor in self.list_due(now)]
 
     @abstractmethod
     def delete(self, monitor_id: str) -> bool:

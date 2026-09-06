@@ -27,6 +27,14 @@ from apps.api.app.schemas.validation import (
 )
 
 JsonSender = Callable[[str, dict[str, str], dict[str, Any], float], dict[str, Any]]
+_REQUIRED_INPUT_CHANGES = {
+    ChangeType.REQUIRED_REQUEST_FIELD_ADDED,
+    ChangeType.REQUIRED_ARGUMENT_ADDED,
+}
+_REMOVED_INPUT_CHANGES = {
+    ChangeType.REQUEST_FIELD_REMOVED,
+    ChangeType.ARGUMENT_REMOVED,
+}
 
 
 class TestPlanProviderError(RuntimeError):
@@ -59,10 +67,12 @@ class TestPlanProvider(ABC):
         return None
 
 
-class MockTestPlanProvider(TestPlanProvider):
-    name = TestPlanProviderName.MOCK
+class DeterministicTestPlanProvider(TestPlanProvider):
+    """Rules-based test planning derived from contract and impact evidence."""
+
+    name = TestPlanProviderName.DETERMINISTIC
     model_name = "deterministic-test-plan-v1"
-    mode = TestPlanProviderMode.DETERMINISTIC_MOCK
+    mode = TestPlanProviderMode.DETERMINISTIC
 
     def generate(
         self, context: TestPlanContext, *, max_cases: int, max_context_bytes: int
@@ -78,32 +88,31 @@ class MockTestPlanProvider(TestPlanProvider):
         for change in context.changes:
             if len(cases) >= max_cases:
                 break
-            if change.change_type == ChangeType.REQUIRED_REQUEST_FIELD_ADDED and change.subject:
+            operation = change.operation_identifier or f"{change.method} {change.path}".strip()
+            if change.change_type in _REQUIRED_INPUT_CHANGES and change.subject:
                 cases.append(
                     _case(
                         f"Send required {change.subject}",
                         TestType.CONTRACT,
                         direct_target,
-                        f"The new {change.method} {change.path} contract requires "
-                        f"{change.subject}.",
+                        f"The new {operation} contract requires {change.subject}.",
                         [
-                            f"Construct a representative {change.method} {change.path} request.",
+                            f"Construct a representative {operation} request.",
                             f"Inspect the outgoing payload for {change.subject}.",
                         ],
                         f"The payload contains a valid {change.subject} value.",
                         TestPriority.HIGH,
                     )
                 )
-            elif change.change_type == ChangeType.REQUEST_FIELD_REMOVED and change.subject:
+            elif change.change_type in _REMOVED_INPUT_CHANGES and change.subject:
                 cases.append(
                     _case(
                         f"Reject stale {change.subject} payload data",
                         TestType.NEGATIVE,
                         direct_target,
-                        f"The new contract removes {change.subject} from "
-                        f"{change.method} {change.path}.",
+                        f"The new contract removes {change.subject} from {operation}.",
                         [
-                            f"Exercise the {change.method} {change.path} client path.",
+                            f"Exercise the {operation} client path.",
                             f"Assert the outgoing payload omits {change.subject}.",
                         ],
                         f"No {change.subject} property is sent.",
@@ -143,6 +152,14 @@ class MockTestPlanProvider(TestPlanProvider):
             ),
             cases=cases[:max_cases],
         )
+
+
+class MockTestPlanProvider(DeterministicTestPlanProvider):
+    """Explicit development-only compatibility provider."""
+
+    name = TestPlanProviderName.MOCK
+    model_name = "development-mock-test-plan-v1"
+    mode = TestPlanProviderMode.DETERMINISTIC_MOCK
 
 
 class GeminiTestPlanProvider(TestPlanProvider):

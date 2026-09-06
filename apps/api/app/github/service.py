@@ -6,6 +6,7 @@ from dataclasses import replace
 from datetime import UTC, datetime
 from uuid import uuid4
 
+from apps.api.app.auth.authorization import Permission, authorize
 from apps.api.app.auth.service import AuthService
 from apps.api.app.core.exceptions import DriftGuardError
 from apps.api.app.core.workspace_context import WorkspacePrincipal
@@ -28,6 +29,7 @@ class GitHubOnboardingService:
     async def connect(
         self, principal: WorkspacePrincipal, github_installation_id: int
     ) -> GitHubInstallation:
+        authorize(Permission.MANAGE_REPOSITORIES, principal)
         metadata = await self.provider.get_installation(github_installation_id)
         now = datetime.now(UTC)
         installation = self.repository.upsert_installation(
@@ -60,6 +62,7 @@ class GitHubOnboardingService:
     async def sync(
         self, principal: WorkspacePrincipal, installation_id: str
     ) -> list[RepositoryConnection]:
+        authorize(Permission.MANAGE_REPOSITORIES, principal)
         installation = self._installation(principal, installation_id)
         if installation.revoked_at:
             raise DriftGuardError(
@@ -116,6 +119,7 @@ class GitHubOnboardingService:
     def set_enabled(
         self, principal: WorkspacePrincipal, connection_id: str, enabled: bool
     ) -> RepositoryConnection:
+        authorize(Permission.MANAGE_REPOSITORIES, principal)
         connection = self.require_repository(principal, connection_id, require_enabled=False)
         updated = replace(connection, enabled=enabled, updated_at=datetime.now(UTC))
         updated = self.repository.upsert_repository(updated)
@@ -135,6 +139,7 @@ class GitHubOnboardingService:
         *,
         require_enabled: bool = True,
     ) -> RepositoryConnection:
+        authorize(Permission.READ_REPOSITORIES, principal)
         connection = self.repository.get_repository(connection_id)
         if connection is None or connection.workspace_id != principal.workspace_id:
             raise DriftGuardError(

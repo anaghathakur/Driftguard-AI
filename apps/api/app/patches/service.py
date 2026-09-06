@@ -8,6 +8,7 @@ from dataclasses import asdict
 from datetime import UTC, datetime
 from uuid import NAMESPACE_URL, uuid5
 
+from apps.api.app.auth.authorization import Permission, authorize
 from apps.api.app.core.config import settings
 from apps.api.app.core.exceptions import DriftGuardError
 from apps.api.app.core.redaction import redact_secrets
@@ -15,6 +16,7 @@ from apps.api.app.domain.analysis import AnalysisKind, AnalysisStatus, Repositor
 from apps.api.app.patches.context import (
     PatchGenerationContext,
     build_patch_prompt,
+    scope_patch_context,
 )
 from apps.api.app.patches.provider import PatchGenerationProvider, PatchProviderError
 from apps.api.app.patches.validator import validate_patch
@@ -29,7 +31,7 @@ from apps.api.app.schemas.patch import (
     PatchStatus,
 )
 
-PATCH_PROFILE_VERSION = "1.0.0"
+PATCH_PROFILE_VERSION = "1.1.0"
 
 
 class PatchProposalService:
@@ -50,6 +52,7 @@ class PatchProposalService:
         repository_content: bytes | None = None,
         repository_filename: str | None = None,
     ) -> PatchProposal:
+        authorize(Permission.GENERATE_PATCH)
         analysis = self._require_eligible_analysis(analysis_id)
         scan = await self._verified_source(
             analysis,
@@ -77,27 +80,34 @@ class PatchProposalService:
                 message="No impacted source file is available for a safe proposed patch.",
                 status_code=422,
             )
+        context = scope_patch_context(
+            PatchGenerationContext(
+                analysis_id=analysis_id,
+                changes=tuple(changes),
+                matches=matches,
+                migrations=migrations,
+                risks=risks,
+                source_files=scan.files,
+                allowed_files=allowed_files,
+            )
+        )
+        if not context.migrations:
+            raise DriftGuardError(
+                code="patch_generation_failed",
+                message="No impacted migration is available to ground a safe patch.",
+                status_code=422,
+            )
         fingerprint = _patch_fingerprint(
             analysis_id=analysis_id,
             repository_hash=scan.archive_sha256,
             provider=self.provider.name.value,
             model=self.provider.model_name,
-            migration_ids=[item.recommendation_id for item in migrations],
-            change_ids=[item.change_id for item in changes],
+            migration_ids=[item.recommendation_id for item in context.migrations],
+            change_ids=[item.change_id for item in context.changes],
         )
         existing = self.repository.get_patch_by_fingerprint(analysis_id, fingerprint)
         if existing is not None:
             return existing
-
-        context = PatchGenerationContext(
-            analysis_id=analysis_id,
-            changes=tuple(changes),
-            matches=matches,
-            migrations=migrations,
-            risks=risks,
-            source_files=scan.files,
-            allowed_files=allowed_files,
-        )
         try:
             prompt = build_patch_prompt(
                 context,
@@ -188,6 +198,7 @@ class PatchProposalService:
         return proposal
 
     def _require_analysis(self, analysis_id: str):
+        authorize(Permission.READ_ANALYSES)
         analysis = self.repository.get_analysis(analysis_id)
         if analysis is None:
             raise DriftGuardError(

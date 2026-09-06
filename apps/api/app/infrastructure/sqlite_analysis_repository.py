@@ -89,6 +89,15 @@ CREATE TABLE IF NOT EXISTS analysis_changes (
     category TEXT NOT NULL,
     severity TEXT NOT NULL,
     explanation TEXT NOT NULL,
+    contract_type TEXT NOT NULL DEFAULT 'openapi',
+    operation_kind TEXT NOT NULL DEFAULT 'http_operation',
+    operation_identifier TEXT,
+    contract_location TEXT,
+    old_type TEXT,
+    new_type TEXT,
+    old_required INTEGER,
+    new_required INTEGER,
+    metadata_json TEXT NOT NULL DEFAULT '{}',
     UNIQUE (analysis_id, ordinal),
     UNIQUE (analysis_id, change_id),
     FOREIGN KEY (analysis_id) REFERENCES analyses(analysis_id) ON DELETE CASCADE
@@ -156,6 +165,7 @@ CREATE TABLE IF NOT EXISTS migration_recommendations (
             'deterministic_fallback'
         )
     ),
+    recommendation_source_actual TEXT,
     prompt_version TEXT NOT NULL,
     schema_version TEXT NOT NULL,
     summary TEXT NOT NULL CHECK (length(summary) <= 500),
@@ -225,10 +235,12 @@ CREATE TABLE IF NOT EXISTS patch_proposals (
     status TEXT NOT NULL CHECK (status = 'validated'),
     summary TEXT NOT NULL CHECK (length(summary) <= 500),
     provider TEXT NOT NULL CHECK (provider IN ('mock', 'gemini')),
+    provider_actual TEXT,
     provider_model TEXT NOT NULL,
     provider_mode TEXT NOT NULL CHECK (
         provider_mode IN ('deterministic_mock', 'external')
     ),
+    provider_mode_actual TEXT,
     patch_profile_version TEXT NOT NULL,
     source_repository_hash TEXT NOT NULL CHECK (length(source_repository_hash) = 64),
     files_changed INTEGER NOT NULL CHECK (files_changed > 0),
@@ -298,8 +310,11 @@ class SQLiteAnalysisRepository(AnalysisRepository):
         with self._connect() as connection:
             connection.executescript(SCHEMA)
             _ensure_analysis_source_columns(connection)
+            _ensure_analysis_change_columns(connection)
             _ensure_repository_match_columns(connection)
             _ensure_analysis_workspace_column(connection)
+            _ensure_phase22_provider_columns(connection)
+            connection.commit()
 
     def create_or_get(self, submission: AnalysisSubmission) -> AnalysisCreation:
         workspace_id = current_workspace_id()
@@ -452,14 +467,20 @@ class SQLiteAnalysisRepository(AnalysisRepository):
     ) -> None:
         timestamp = _timestamp(completed_at)
         with self._transaction() as connection:
+            # A long-running development process may hold a repository instance that
+            # predates the additive Phase 22 migration. Keep the affected writes
+            # self-healing without changing legacy CHECK constraints or stored data.
+            _ensure_phase22_provider_columns(connection)
             for ordinal, change in enumerate(comparison.changes, start=1):
                 connection.execute(
                     """
                     INSERT INTO analysis_changes (
                         analysis_id, ordinal, change_id, change_type, path, method,
                         subject, old_value_json, new_value_json, breaking, category,
-                        severity, explanation
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        severity, explanation, contract_type, operation_kind,
+                        operation_identifier, contract_location, old_type, new_type,
+                        old_required, new_required, metadata_json
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         analysis_id,
@@ -475,6 +496,15 @@ class SQLiteAnalysisRepository(AnalysisRepository):
                         change.category.value,
                         change.severity.value,
                         change.explanation,
+                        change.contract_type.value,
+                        change.operation_kind.value,
+                        change.operation_identifier,
+                        change.contract_location,
+                        change.old_type,
+                        change.new_type,
+                        None if change.old_required is None else int(change.old_required),
+                        None if change.new_required is None else int(change.new_required),
+                        _json(change.metadata),
                     ),
                 )
             for impact in impacts:
@@ -551,6 +581,7 @@ class SQLiteAnalysisRepository(AnalysisRepository):
                         provider,
                         provider_model,
                         recommendation_source,
+                        recommendation_source_actual,
                         prompt_version,
                         schema_version,
                         summary,
@@ -567,7 +598,7 @@ class SQLiteAnalysisRepository(AnalysisRepository):
                         generated_at
                     ) VALUES (
                         ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+                        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
                     )
                     """,
                     (
@@ -576,6 +607,11 @@ class SQLiteAnalysisRepository(AnalysisRepository):
                         recommendation.change_id,
                         recommendation.provider.value,
                         recommendation.provider_model,
+                        (
+                            "deterministic_fallback"
+                            if recommendation.recommendation_source.value == "deterministic"
+                            else recommendation.recommendation_source.value
+                        ),
                         recommendation.recommendation_source.value,
                         recommendation.prompt_version,
                         recommendation.schema_version,
@@ -666,6 +702,15 @@ class SQLiteAnalysisRepository(AnalysisRepository):
                     "category": row["category"],
                     "severity": row["severity"],
                     "explanation": row["explanation"],
+                    "contract_type": row["contract_type"],
+                    "operation_kind": row["operation_kind"],
+                    "operation_identifier": row["operation_identifier"],
+                    "contract_location": row["contract_location"],
+                    "old_type": row["old_type"],
+                    "new_type": row["new_type"],
+                    "old_required": _optional_bool(row["old_required"]),
+                    "new_required": _optional_bool(row["new_required"]),
+                    "metadata": _load_json(row["metadata_json"]) or {},
                 }
             )
             for row in rows
@@ -764,7 +809,9 @@ class SQLiteAnalysisRepository(AnalysisRepository):
                     "change_id": row["change_id"],
                     "provider": row["provider"],
                     "provider_model": row["provider_model"],
-                    "recommendation_source": row["recommendation_source"],
+                    "recommendation_source": (
+                        row["recommendation_source_actual"] or row["recommendation_source"]
+                    ),
                     "prompt_version": row["prompt_version"],
                     "schema_version": row["schema_version"],
                     "summary": row["summary"],
@@ -807,6 +854,7 @@ class SQLiteAnalysisRepository(AnalysisRepository):
 
     def save_patch_proposal(self, proposal: PatchProposal) -> PatchProposal:
         with self._transaction() as connection:
+            _ensure_phase22_provider_columns(connection)
             existing = connection.execute(
                 "SELECT * FROM patch_proposals WHERE request_fingerprint = ?",
                 (proposal.request_fingerprint,),
@@ -817,11 +865,12 @@ class SQLiteAnalysisRepository(AnalysisRepository):
                 """
                 INSERT INTO patch_proposals (
                     patch_id, analysis_id, request_fingerprint, created_at,
-                    status, summary, provider, provider_model, provider_mode,
+                    status, summary, provider, provider_actual, provider_model,
+                    provider_mode, provider_mode_actual,
                     patch_profile_version, source_repository_hash,
                     files_changed, edit_count, validation_json, warnings_json,
                     unified_diff, files_json, redactions_applied
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     proposal.patch_id,
@@ -830,8 +879,18 @@ class SQLiteAnalysisRepository(AnalysisRepository):
                     _timestamp(proposal.created_at),
                     proposal.status.value,
                     proposal.summary,
+                    (
+                        "mock"
+                        if proposal.provider.value == "deterministic"
+                        else proposal.provider.value
+                    ),
                     proposal.provider.value,
                     proposal.provider_model,
+                    (
+                        "deterministic_mock"
+                        if proposal.provider_mode.value == "evidence_based"
+                        else proposal.provider_mode.value
+                    ),
                     proposal.provider_mode.value,
                     proposal.patch_profile_version,
                     proposal.source_repository_hash,
@@ -1091,9 +1150,9 @@ def _patch_proposal(row: sqlite3.Row) -> PatchProposal:
             "created_at": _datetime(row["created_at"]),
             "status": row["status"],
             "summary": row["summary"],
-            "provider": row["provider"],
+            "provider": row["provider_actual"] or row["provider"],
             "provider_model": row["provider_model"],
-            "provider_mode": row["provider_mode"],
+            "provider_mode": row["provider_mode_actual"] or row["provider_mode"],
             "patch_profile_version": row["patch_profile_version"],
             "source_repository_hash": row["source_repository_hash"],
             "files_changed": row["files_changed"],
@@ -1161,6 +1220,30 @@ def _safe_trace_json(trace: list[Any]) -> str:
     return _json(safe)
 
 
+def _ensure_phase22_provider_columns(connection: sqlite3.Connection) -> None:
+    migration_columns = {
+        row[1]
+        for row in connection.execute("PRAGMA table_info(migration_recommendations)")
+    }
+    if "recommendation_source_actual" not in migration_columns:
+        connection.execute(
+            "ALTER TABLE migration_recommendations "
+            "ADD COLUMN recommendation_source_actual TEXT"
+        )
+    patch_columns = {
+        row[1] for row in connection.execute("PRAGMA table_info(patch_proposals)")
+    }
+    additions = {
+        "provider_actual": "TEXT",
+        "provider_mode_actual": "TEXT",
+    }
+    for name, definition in additions.items():
+        if name not in patch_columns:
+            connection.execute(
+                f"ALTER TABLE patch_proposals ADD COLUMN {name} {definition}"
+            )
+
+
 def _ensure_analysis_source_columns(connection: sqlite3.Connection) -> None:
     columns = {row[1] for row in connection.execute("PRAGMA table_info(analyses)").fetchall()}
     additions = {
@@ -1205,3 +1288,27 @@ def _ensure_repository_match_columns(connection: sqlite3.Connection) -> None:
     for name, definition in additions.items():
         if name not in columns:
             connection.execute(f"ALTER TABLE repository_matches ADD COLUMN {name} {definition}")
+
+
+def _ensure_analysis_change_columns(connection: sqlite3.Connection) -> None:
+    columns = {
+        row[1] for row in connection.execute("PRAGMA table_info(analysis_changes)").fetchall()
+    }
+    additions = {
+        "contract_type": "TEXT NOT NULL DEFAULT 'openapi'",
+        "operation_kind": "TEXT NOT NULL DEFAULT 'http_operation'",
+        "operation_identifier": "TEXT",
+        "contract_location": "TEXT",
+        "old_type": "TEXT",
+        "new_type": "TEXT",
+        "old_required": "INTEGER",
+        "new_required": "INTEGER",
+        "metadata_json": "TEXT NOT NULL DEFAULT '{}'",
+    }
+    for name, definition in additions.items():
+        if name not in columns:
+            connection.execute(f"ALTER TABLE analysis_changes ADD COLUMN {name} {definition}")
+
+
+def _optional_bool(value: Any) -> bool | None:
+    return None if value is None else bool(value)

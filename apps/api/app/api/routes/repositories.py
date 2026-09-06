@@ -8,6 +8,7 @@ from urllib.parse import urlencode
 from fastapi import APIRouter, Depends
 from fastapi.responses import RedirectResponse
 
+from apps.api.app.auth.authorization import Permission, authorize, requires
 from apps.api.app.core.config import settings
 from apps.api.app.core.dependencies import get_github_onboarding_service
 from apps.api.app.core.exceptions import DriftGuardError
@@ -20,12 +21,17 @@ from apps.api.app.schemas.repository_connection import (
     RepositoryEnableRequest,
 )
 
-router = APIRouter(prefix="/github", tags=["GitHub repositories"])
+router = APIRouter(
+    prefix="/github",
+    tags=["GitHub repositories"],
+    dependencies=[Depends(requires(Permission.READ_REPOSITORIES))],
+)
 Service = Annotated[GitHubOnboardingService, Depends(get_github_onboarding_service)]
 
 
 @router.get("/installations/start")
 def start_installation(service: Service, return_to: str | None = None) -> RedirectResponse:
+    authorize(Permission.MANAGE_REPOSITORIES)
     if not settings.github_app_install_url:
         raise DriftGuardError(
             code="github_app_not_configured",

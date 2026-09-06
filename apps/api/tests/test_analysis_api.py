@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 from io import BytesIO
 from zipfile import ZIP_DEFLATED, ZipFile
@@ -135,6 +136,49 @@ def test_failed_analysis_and_failed_pipeline_stage_are_preserved(client, base_sp
     duplicate = client.post("/api/v1/specifications/compare", files=files)
     assert duplicate.status_code == 400
     assert len(client.get("/api/v1/analyses").json()) == 1
+
+
+def test_unexpected_analysis_failure_is_logged_safely(
+    client,
+    analysis_repository,
+    base_spec,
+    clone,
+    monkeypatch,
+    caplog,
+):
+    private_marker = "UPLOADED_CONTRACT_CONTENT_MUST_NOT_APPEAR"
+    old_spec = clone(base_spec)
+    old_spec["info"]["description"] = private_marker
+    new_spec = changed_spec(old_spec, clone)
+
+    def fail_persistence(**_kwargs):
+        raise RuntimeError(f"unsafe database detail: {private_marker}")
+
+    monkeypatch.setattr(analysis_repository, "save_success", fail_persistence)
+    caplog.set_level(logging.ERROR, logger="driftguard.analysis")
+
+    response = client.post(
+        "/api/v1/specifications/compare",
+        files={
+            "old_spec": upload(old_spec, "private-old.json"),
+            "new_spec": upload(new_spec, "private-new.json"),
+        },
+    )
+
+    assert response.status_code == 500
+    assert response.json() == {
+        "error": {
+            "code": "analysis_execution_failed",
+            "message": "The analysis could not be completed safely.",
+            "details": {},
+        }
+    }
+    assert "exception_type=RuntimeError" in caplog.text
+    assert "stage=persist_results" in caplog.text
+    assert "analysis_id=" in caplog.text
+    assert "Traceback" in caplog.text
+    assert private_marker not in caplog.text
+    assert private_marker not in response.text
 
 
 def test_comparison_history_has_no_repository_data(client, base_spec, clone):

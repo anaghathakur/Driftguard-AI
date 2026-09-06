@@ -40,8 +40,16 @@ class WorkspaceContextMiddleware(BaseHTTPMiddleware):
                     session, user, workspace = self.auth_service.authenticate(session_token)
                     request.state.auth = (session, user, workspace)
                     if workspace:
+                        membership = self.auth_service.repository.get_membership(
+                            user.user_id, workspace.workspace_id
+                        )
+                        if membership is None:
+                            raise _workspace_access_denied()
                         principal = WorkspacePrincipal(
-                            workspace.workspace_id, user.user_id, user.github_login
+                            workspace.workspace_id,
+                            user.user_id,
+                            user.github_login,
+                            role=membership.role,
                         )
                     if request.method in {"POST", "PUT", "PATCH", "DELETE"} and not public:
                         self.auth_service.verify_csrf(session, request.headers.get("X-CSRF-Token"))
@@ -120,6 +128,14 @@ def _audit_action(method: str, path: str) -> str | None:
         return "pull_request.previewed"
     if method == "POST" and path.endswith("/pull-request"):
         return "pull_request.created"
+    if path == "/api/v1/monitors" and method == "POST":
+        return "monitor.created"
+    if "/api/v1/monitors/" in path and method == "PATCH":
+        return "monitor.updated"
+    if "/api/v1/monitors/" in path and method == "DELETE":
+        return "monitor.deleted"
+    if path.endswith("/check") and "/api/v1/monitors/" in path and method == "POST":
+        return "monitor.checked"
     return None
 
 
@@ -128,4 +144,15 @@ def _resource(path: str) -> tuple[str, str | None]:
     if "analyses" in parts:
         index = parts.index("analyses")
         return "analysis", parts[index + 1] if len(parts) > index + 1 else None
+    if "monitors" in parts:
+        index = parts.index("monitors")
+        return "monitor", parts[index + 1] if len(parts) > index + 1 else None
     return "analysis", None
+
+
+def _workspace_access_denied() -> DriftGuardError:
+    return DriftGuardError(
+        code="workspace_access_denied",
+        message="The active workspace is not available to this user.",
+        status_code=403,
+    )

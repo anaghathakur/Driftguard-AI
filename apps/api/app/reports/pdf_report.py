@@ -354,9 +354,9 @@ def _contract_block(
             styles,
         ),
         _contract_row(
-            "OpenAPI",
-            old_contract.openapi_version,
-            new_contract.openapi_version,
+            "Contract schema",
+            old_contract.schema_version or old_contract.openapi_version,
+            new_contract.schema_version or new_contract.openapi_version,
             styles,
         ),
         _contract_row(
@@ -428,7 +428,8 @@ def _changes_block(
                 color=BORDER,
             )
         )
-        title = f"{index}. {escape(_display(change.method))} {escape(_display(change.path))}"
+        label = change.operation_identifier or f"{change.method} {change.path}".strip()
+        title = f"{index}. {escape(_display(label or change.contract_location))}"
         story.append(Paragraph(title, styles["change_title"]))
 
         classification = (
@@ -858,9 +859,18 @@ def _patch_validations_block(
                     styles["small"],
                 )
             )
+    executed = any(
+        validation.execution is not None and bool(validation.execution.commands)
+        for validation in report.patch_validations
+    )
     story.append(
         Paragraph(
-            "Static validation only. Repository code and tests were not executed.",
+            (
+                "Validation included allowlisted commands in a disposable copy. "
+                "Runtime isolation and deployment safety are not guaranteed."
+                if executed
+                else "Static validation only. Repository code and tests were not executed."
+            ),
             styles["body"],
         )
     )

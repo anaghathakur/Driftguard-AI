@@ -15,10 +15,12 @@ class PatchStatus(StrEnum):
 class PatchProvider(StrEnum):
     MOCK = "mock"
     GEMINI = "gemini"
+    DETERMINISTIC = "deterministic"
 
 
 class PatchProviderMode(StrEnum):
     DETERMINISTIC_MOCK = "deterministic_mock"
+    EVIDENCE_BASED = "evidence_based"
     EXTERNAL = "external"
 
 

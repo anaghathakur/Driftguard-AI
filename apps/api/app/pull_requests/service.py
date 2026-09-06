@@ -10,6 +10,7 @@ from datetime import UTC, datetime
 from urllib.parse import urlparse
 from uuid import NAMESPACE_URL, uuid5
 
+from apps.api.app.auth.authorization import Permission, authorize
 from apps.api.app.core.config import settings
 from apps.api.app.core.exceptions import DriftGuardError
 from apps.api.app.core.redaction import redact_secrets
@@ -50,6 +51,7 @@ class PullRequestWorkflowService:
     async def preview(
         self, analysis_id: str, patch_id: str, validation_id: str
     ) -> PullRequestPreview:
+        authorize(Permission.CREATE_PULL_REQUEST)
         analysis, patch, validation = self._eligible(analysis_id, patch_id, validation_id)
         metadata = await self.provider.prepare_repository(
             analysis.repository_url or "",
@@ -66,12 +68,13 @@ class PullRequestWorkflowService:
             files_changed=patch.files_changed,
             edit_count=patch.edit_count,
             validation_readiness=validation.readiness,
-            tests_executed=False,
+            tests_executed=bool(validation.execution and validation.execution.commands),
         )
 
     async def create(
         self, analysis_id: str, patch_id: str, validation_id: str
     ) -> GitHubPullRequestRecord:
+        authorize(Permission.CREATE_PULL_REQUEST)
         analysis, patch, validation = self._eligible(analysis_id, patch_id, validation_id)
         metadata = await self.provider.prepare_repository(
             analysis.repository_url or "",
@@ -182,6 +185,7 @@ class PullRequestWorkflowService:
                 validation_readiness=validation.readiness,
                 files_changed=patch.files_changed,
                 edit_count=patch.edit_count,
+                tests_executed=bool(validation.execution and validation.execution.commands),
                 modified_file_sha256={
                     path: hashlib.sha256(content.encode()).hexdigest()
                     for path, content in sorted(trusted.modified_sources.items())
@@ -381,6 +385,7 @@ class PullRequestWorkflowService:
         return analysis, patch, validation
 
     def _require_analysis(self, analysis_id: str):
+        authorize(Permission.READ_ANALYSES)
         analysis = self.repository.get_analysis(analysis_id)
         if analysis is None:
             raise DriftGuardError(
@@ -422,10 +427,14 @@ def _branch_name(analysis_id: str, patch_id: str) -> str:
 
 
 def _operation_label(changes) -> str:
-    operations = sorted({(item.method.upper(), item.path) for item in changes})
+    operations = sorted(
+        {
+            item.operation_identifier or f"{item.method.upper()} {item.path}".strip()
+            for item in changes
+        }
+    )
     if len(operations) == 1:
-        method, path = operations[0]
-        return _metadata_text(f"{method} {path}", maximum=120)
+        return _metadata_text(operations[0], maximum=120)
     return "breaking API changes"
 
 
@@ -441,7 +450,7 @@ def _pull_request_body(*, changes, matches, patch, validation, maximum: int) -> 
     direct = [item for item in matches if item.impact_depth == 0]
     transitive = [item for item in matches if item.impact_depth > 0]
     change_lines = [
-        f"- {_markdown_text(item.method.upper())} {_markdown_text(item.path)}: "
+        f"- {_markdown_text(_operation_label([item]))}: "
         f"{_markdown_text(item.change_type.value.replace('_', ' '))}"
         for item in changes[:20]
     ]

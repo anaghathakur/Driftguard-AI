@@ -61,6 +61,9 @@ class FirestoreWorkspaceRepository(WorkspaceRepository):
                 user.avatar_url,
                 existing.created_at,
                 user.updated_at,
+                user.external_auth_provider,
+                user.external_subject,
+                user.email,
             )
         self.client.collection("users").document(user.user_id).set(_user_data(user))
         return user
@@ -80,6 +83,23 @@ class FirestoreWorkspaceRepository(WorkspaceRepository):
         )
         return _user(found.to_dict() or {}) if found else None
 
+    def get_user_by_external_identity(self, provider: str, subject: str) -> User | None:
+        found = next(
+            iter(
+                self.client.collection("users")
+                .where("auth_provider", "==", provider)
+                .where("external_subject", "==", subject)
+                .limit(1)
+                .stream()
+            ),
+            None,
+        )
+        if found:
+            return _user(found.to_dict() or {})
+        if provider == "github" and subject.isdigit():
+            return self.get_user_by_github_id(int(subject))
+        return None
+
     def create_workspace(self, workspace: Workspace, membership: WorkspaceMembership) -> None:
         batch = self.client.batch()
         batch.create(
@@ -91,6 +111,20 @@ class FirestoreWorkspaceRepository(WorkspaceRepository):
             _membership_data(membership),
         )
         batch.commit()
+
+    def ensure_workspace(
+        self, workspace: Workspace, membership: WorkspaceMembership
+    ) -> bool:
+        workspace_ref = self.client.collection("workspaces").document(workspace.workspace_id)
+        membership_ref = self.client.collection("workspace_memberships").document(
+            membership.membership_id
+        )
+        created = not workspace_ref.get().exists
+        batch = self.client.batch()
+        batch.set(workspace_ref, _workspace_data(workspace), merge=True)
+        batch.set(membership_ref, _membership_data(membership), merge=True)
+        batch.commit()
+        return created
 
     def get_workspace(self, workspace_id: str) -> Workspace | None:
         return _get(self.client.collection("workspaces").document(workspace_id), _workspace)
@@ -115,6 +149,55 @@ class FirestoreWorkspaceRepository(WorkspaceRepository):
         )
         found = next(iter(query.stream()), None)
         return _membership(found.to_dict() or {}) if found else None
+
+    def list_workspace_members(self, workspace_id: str) -> list[tuple[WorkspaceMembership, User]]:
+        result = []
+        for item in (
+            self.client.collection("workspace_memberships")
+            .where("workspace_id", "==", workspace_id)
+            .stream()
+        ):
+            membership = _membership(item.to_dict() or {})
+            user = self.get_user(membership.user_id)
+            if user:
+                result.append((membership, user))
+        return sorted(result, key=lambda value: value[0].created_at)
+
+    def save_membership(self, membership: WorkspaceMembership) -> WorkspaceMembership:
+        query = (
+            self.client.collection("workspace_memberships")
+            .where("workspace_id", "==", membership.workspace_id)
+            .where("user_id", "==", membership.user_id)
+            .limit(1)
+        )
+        found = next(iter(query.stream()), None)
+        if found:
+            membership = replace(membership, membership_id=found.id)
+            found.reference.set(_membership_data(membership))
+        else:
+            self.client.collection("workspace_memberships").document(membership.membership_id).set(
+                _membership_data(membership)
+            )
+        return membership
+
+    def delete_membership(self, user_id: str, workspace_id: str) -> bool:
+        query = (
+            self.client.collection("workspace_memberships")
+            .where("workspace_id", "==", workspace_id)
+            .where("user_id", "==", user_id)
+            .limit(1)
+        )
+        found = next(iter(query.stream()), None)
+        if found is None:
+            return False
+        found.reference.delete()
+        return True
+
+    def count_members_by_role(self, workspace_id: str, role: WorkspaceRole) -> int:
+        return sum(
+            membership.role == role
+            for membership, _user_value in self.list_workspace_members(workspace_id)
+        )
 
     def save_session(self, session: AuthSession) -> None:
         self.client.collection("auth_sessions").document(session.session_hash).set(
@@ -266,6 +349,9 @@ def _user_data(v):
         "github_user_id": v.github_user_id,
         "github_login": v.github_login,
         "github_display_name": v.github_display_name,
+        "auth_provider": v.external_auth_provider,
+        "external_subject": v.external_subject or str(v.github_user_id),
+        "email": v.email,
         "avatar_url": v.avatar_url,
         "created_at": v.created_at,
         "updated_at": v.updated_at,
@@ -276,6 +362,7 @@ def _workspace_data(v):
     return {
         "workspace_id": v.workspace_id,
         "name": v.name,
+        "created_by_user_id": v.created_by_user_id,
         "slug": v.slug,
         "created_at": v.created_at,
         "updated_at": v.updated_at,
@@ -340,6 +427,9 @@ def _user(d):
         int(d["github_user_id"]),
         d["github_login"],
         d.get("github_display_name"),
+        d.get("auth_provider", "github"),
+        d.get("external_subject", str(d["github_user_id"])),
+        d.get("email"),
         d.get("avatar_url"),
         d["created_at"],
         d["updated_at"],
@@ -347,7 +437,14 @@ def _user(d):
 
 
 def _workspace(d):
-    return Workspace(d["workspace_id"], d["name"], d["slug"], d["created_at"], d["updated_at"])
+    return Workspace(
+        d["workspace_id"],
+        d["name"],
+        d["slug"],
+        d["created_at"],
+        d["updated_at"],
+        d.get("created_by_user_id"),
+    )
 
 
 def _membership(d):
@@ -355,7 +452,7 @@ def _membership(d):
         d["membership_id"],
         d["workspace_id"],
         d["user_id"],
-        WorkspaceRole(d["role"]),
+        WorkspaceRole.DEVELOPER if d["role"] == "member" else WorkspaceRole(d["role"]),
         d["created_at"],
     )
 

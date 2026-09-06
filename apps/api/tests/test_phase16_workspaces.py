@@ -112,7 +112,7 @@ def _zip(files: dict[str, bytes]) -> bytes:
     return output.getvalue()
 
 
-def test_mock_oauth_state_session_csrf_and_workspace_creation(tmp_path) -> None:
+def test_mock_oauth_creates_one_personal_workspace_and_reuses_it(tmp_path) -> None:
     repository = _platform(tmp_path)
     service = _auth(repository)
     authorization_url = service.begin("http://localhost:5173/repositories")
@@ -121,11 +121,24 @@ def test_mock_oauth_state_session_csrf_and_workspace_creation(tmp_path) -> None:
     session_token, csrf_token, return_to = asyncio.run(service.callback("mock-user", state))
     session, user, workspace = service.authenticate(session_token)
 
-    assert return_to.endswith("/repositories")
-    assert workspace is None
+    assert return_to.endswith("/app/onboarding")
+    assert workspace is not None
     service.verify_csrf(session, csrf_token)
-    created = service.create_workspace(session, user, "Acme Engineering")
-    assert service.authenticate(session_token)[2] == created
+    membership = repository.get_membership(user.user_id, workspace.workspace_id)
+    assert membership is not None
+    assert membership.role == WorkspaceRole.OWNER
+    assert len(repository.list_memberships(user.user_id)) == 1
+
+    repeat_url = service.begin("http://localhost:5173/repositories")
+    repeat_state = parse_qs(urlsplit(repeat_url).query)["state"][0]
+    repeat_token, _repeat_csrf, repeat_return_to = asyncio.run(
+        service.callback("mock-user", repeat_state)
+    )
+    _repeat_session, repeat_user, repeat_workspace = service.authenticate(repeat_token)
+    assert repeat_user.user_id == user.user_id
+    assert repeat_workspace == workspace
+    assert repeat_return_to.endswith("/repositories")
+    assert len(repository.list_memberships(user.user_id)) == 1
 
 
 def test_oauth_state_mismatch_and_invalid_session_are_rejected(tmp_path) -> None:
@@ -161,8 +174,8 @@ def test_analysis_and_monitor_storage_are_isolated_by_workspace(tmp_path) -> Non
     monitors.initialize()
     _platform_repository = SQLiteWorkspaceRepository(database)
     _platform_repository.initialize()
-    principal_a = WorkspacePrincipal("workspace-a", "user-a", "alpha")
-    principal_b = WorkspacePrincipal("workspace-b", "user-b", "beta")
+    principal_a = WorkspacePrincipal("workspace-a", "user-a", "alpha", role=WorkspaceRole.OWNER)
+    principal_b = WorkspacePrincipal("workspace-b", "user-b", "beta", role=WorkspaceRole.OWNER)
 
     with workspace_scope(principal_a):
         analysis_a = analyses.create_or_get(_submission("a" * 64)).analysis
@@ -190,7 +203,9 @@ def test_legacy_local_analysis_remains_accessible(tmp_path) -> None:
 
     with workspace_scope(WorkspacePrincipal(LOCAL_WORKSPACE_ID, local=True)):
         assert repository.get_analysis(created.analysis_id) is not None
-    with workspace_scope(WorkspacePrincipal("another-workspace", "user", "other")):
+    with workspace_scope(
+        WorkspacePrincipal("another-workspace", "user", "other", role=WorkspaceRole.OWNER)
+    ):
         assert repository.get_analysis(created.analysis_id) is None
 
 
@@ -252,7 +267,9 @@ def test_installation_sync_uses_provider_metadata_and_workspace_authorization(tm
         )
     ]
     service = GitHubOnboardingService(repository, provider, _auth(repository))
-    principal = WorkspacePrincipal(workspace.workspace_id, user.user_id, user.github_login)
+    principal = WorkspacePrincipal(
+        workspace.workspace_id, user.user_id, user.github_login, role=WorkspaceRole.OWNER
+    )
     installation = asyncio.run(service.connect(principal, 1))
     synchronized = asyncio.run(service.sync(principal, installation.installation_id))
 
@@ -262,7 +279,7 @@ def test_installation_sync_uses_provider_metadata_and_workspace_authorization(tm
     assert service.require_repository(principal, synchronized[0].connection_id) == synchronized[0]
     with pytest.raises(DriftGuardError):
         service.require_repository(
-            WorkspacePrincipal("another", "intruder", "intruder"),
+            WorkspacePrincipal("another", "intruder", "intruder", role=WorkspaceRole.OWNER),
             synchronized[0].connection_id,
         )
 
@@ -274,11 +291,9 @@ def test_child_workflow_services_hide_cross_workspace_analysis_ids(tmp_path) -> 
     source = GitHubRepositorySource()
     patch_service = PatchProposalService(analyses, MockPatchGenerationProvider(), source)
     validation_service = PatchValidationService(analyses, MockTestPlanProvider(), source)
-    pull_request_service = PullRequestWorkflowService(
-        analyses, MockGitHubWriteProvider(), source
-    )
-    principal_a = WorkspacePrincipal("workspace-a", "user-a", "alpha")
-    principal_b = WorkspacePrincipal("workspace-b", "user-b", "beta")
+    pull_request_service = PullRequestWorkflowService(analyses, MockGitHubWriteProvider(), source)
+    principal_a = WorkspacePrincipal("workspace-a", "user-a", "alpha", role=WorkspaceRole.OWNER)
+    principal_b = WorkspacePrincipal("workspace-b", "user-b", "beta", role=WorkspaceRole.OWNER)
 
     with workspace_scope(principal_a):
         analysis_id = analyses.create_or_get(_submission("d" * 64)).analysis.analysis_id

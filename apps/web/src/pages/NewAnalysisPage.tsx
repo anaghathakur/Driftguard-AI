@@ -1,5 +1,6 @@
 import "../analysis.css";
 import type { Dispatch, SetStateAction } from "react";
+import type { ContractTypeSelection } from "../lib/api";
 
 export type AnalysisMode = "comparison" | "impact";
 export type RepositorySourceMode = "upload" | "github" | "connected";
@@ -11,6 +12,8 @@ type NewAnalysisPageProps = {
   setOldSpec: Dispatch<SetStateAction<File | null>>;
   newSpec: File | null;
   setNewSpec: Dispatch<SetStateAction<File | null>>;
+  contractType: ContractTypeSelection;
+  setContractType: (value: ContractTypeSelection) => void;
   repository: File | null;
   setRepository: Dispatch<SetStateAction<File | null>>;
   repositorySource: RepositorySourceMode;
@@ -31,7 +34,7 @@ type NewAnalysisPageProps = {
 };
 
 const pipelineStages = [
-  ["Validating specifications", "OpenAPI 3.x and local references"],
+  ["Validating contracts", "OpenAPI 3.x or GraphQL SDL"],
   ["Detecting contract changes", "Breaking and compatible changes"],
   ["Scanning repository", "Static source analysis when provided"],
   ["Building dependency graph", "Direct, wrapper, and transitive callers"],
@@ -46,6 +49,8 @@ export function NewAnalysisPage(props: NewAnalysisPageProps) {
     setOldSpec,
     newSpec,
     setNewSpec,
+    contractType,
+    setContractType,
     repository,
     setRepository,
     repositorySource,
@@ -89,14 +94,23 @@ export function NewAnalysisPage(props: NewAnalysisPageProps) {
           <section className="panel analysis-section">
             <div className="analysis-section-heading">
               <span>1</span>
-              <div><h2>API Contract</h2><p>JSON, YAML, and YML OpenAPI 3.x files are supported.</p></div>
+              <div><h2>API Contract</h2><p>OpenAPI 3.x JSON/YAML and GraphQL SDL are supported.</p></div>
             </div>
+            <label className="text-field" htmlFor="contract-type">
+              <span><strong>Contract type</strong></span>
+              <select id="contract-type" value={contractType} disabled={isAnalyzing} onChange={(event) => setContractType(event.target.value as ContractTypeSelection)}>
+                <option value="auto">Auto-detect</option>
+                <option value="openapi">OpenAPI</option>
+                <option value="graphql">GraphQL</option>
+              </select>
+              <small>Auto-detect uses the file extension and validates both files as the same protocol.</small>
+            </label>
             <div className="contract-grid">
               <FileUpload
                 id="current-contract"
                 label="Current contract"
                 description="The contract consumers use today"
-                accept=".json,.yaml,.yml,application/json,application/yaml,text/yaml"
+                accept=".json,.yaml,.yml,.graphql,.gql,application/json,application/yaml,text/yaml,application/graphql"
                 file={oldSpec}
                 disabled={isAnalyzing}
                 onChange={setOldSpec}
@@ -105,7 +119,7 @@ export function NewAnalysisPage(props: NewAnalysisPageProps) {
                 id="new-contract"
                 label="New contract"
                 description="The proposed or newly released contract"
-                accept=".json,.yaml,.yml,application/json,application/yaml,text/yaml"
+                accept=".json,.yaml,.yml,.graphql,.gql,application/json,application/yaml,text/yaml,application/graphql"
                 file={newSpec}
                 disabled={isAnalyzing}
                 onChange={setNewSpec}

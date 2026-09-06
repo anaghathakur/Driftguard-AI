@@ -45,7 +45,7 @@ def test_rejects_unsafe_archive_paths(path):
     assert error.value.code == "unsafe_repository_archive"
 
 
-def test_rejects_symbolic_links():
+def test_skips_symbolic_links_without_following_them():
     output = BytesIO()
     link = ZipInfo("repo/link.py")
     link.create_system = 3
@@ -53,9 +53,10 @@ def test_rejects_symbolic_links():
     with ZipFile(output, "w") as archive:
         archive.writestr(link, "target.py")
 
-    with pytest.raises(DriftGuardError) as error:
-        RepositoryArchiveScanner().scan("repository.zip", output.getvalue())
-    assert error.value.code == "unsafe_repository_archive"
+    result = RepositoryArchiveScanner().scan("repository.zip", output.getvalue())
+
+    assert result.files == ()
+    assert result.skipped_reasons == {"link_or_special_file": 1}
 
 
 def test_rejects_suspicious_compression_ratio():

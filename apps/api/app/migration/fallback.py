@@ -1,9 +1,9 @@
-"""Deterministic migration guidance used by the mock provider and safe fallback."""
+"""Auditable deterministic migration planning and safe external-provider fallback."""
 
 from __future__ import annotations
 
 from apps.api.app.migration.context import MigrationContext
-from apps.api.app.schemas.comparison import ChangeType
+from apps.api.app.schemas.comparison import ChangeType, ContractType
 from apps.api.app.schemas.migration import GeneratedMigrationContent
 
 
@@ -18,7 +18,7 @@ def deterministic_recommendation(
     )
     method = _short(change.method.upper(), 16)
     path = _short(change.path, 300)
-    location = _short(f"{method} {path}", 340)
+    location = _short(change.operation_identifier or f"{method} {path}".strip(), 340)
 
     match_count = len(context.impact.matches)
     file_count = len({match.file_path for match in context.impact.matches})
@@ -90,7 +90,11 @@ def deterministic_recommendation(
 
             confidence = 0.92 if match_count else 0.78
 
-        case ChangeType.REQUIRED_REQUEST_FIELD_ADDED:
+        case (
+            ChangeType.REQUIRED_REQUEST_FIELD_ADDED
+            | ChangeType.REQUIRED_ARGUMENT_ADDED
+            | ChangeType.REQUIRED_INPUT_FIELD_ADDED
+        ):
             summary = f"Add the required request field '{subject}' to {location} payloads."
 
             steps = [
@@ -107,15 +111,24 @@ def deterministic_recommendation(
                 ("Verify the serialized payload contains only currently supported fields."),
             ]
 
-            code_example = _body_field_example(
-                change.method,
-                change.path,
-                subject,
+            code_example = (
+                ""
+                if change.contract_type is ContractType.GRAPHQL
+                else _body_field_example(
+                    change.method,
+                    change.path,
+                    subject,
+                )
             )
 
             confidence = 0.94 if match_count else 0.8
 
-        case ChangeType.PARAMETER_REMOVED | ChangeType.REQUEST_FIELD_REMOVED:
+        case (
+            ChangeType.PARAMETER_REMOVED
+            | ChangeType.REQUEST_FIELD_REMOVED
+            | ChangeType.ARGUMENT_REMOVED
+            | ChangeType.INPUT_FIELD_REMOVED
+        ):
             summary = f"Remove '{subject}' from {location} requests."
 
             steps = [
@@ -133,7 +146,13 @@ def deterministic_recommendation(
 
             assumptions.append("The provider no longer accepts the removed field or parameter.")
 
-        case ChangeType.PARAMETER_TYPE_CHANGED | ChangeType.REQUEST_FIELD_TYPE_CHANGED:
+        case (
+            ChangeType.PARAMETER_TYPE_CHANGED
+            | ChangeType.REQUEST_FIELD_TYPE_CHANGED
+            | ChangeType.GRAPHQL_INPUT_TYPE_CHANGED
+            | ChangeType.GRAPHQL_RETURN_TYPE_CHANGED
+            | ChangeType.NULLABILITY_TIGHTENED
+        ):
             summary = f"Convert '{subject}' to the new type required by {location}."
 
             steps = [

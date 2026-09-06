@@ -169,7 +169,13 @@ class RealGitHubInstallationProvider(GitHubInstallationProvider):
                 code="repository_file_limit_exceeded",
                 message="Repository tree exceeds the configured entry limit.",
                 status_code=413,
-                details={"maximum": settings.max_repository_tree_entries},
+                details={
+                    "limit": "github_tree_entries",
+                    "actual_entries": len(entries),
+                    "configured_max_entries": settings.max_repository_tree_entries,
+                    "github_tree_truncated": bool(tree.get("truncated")),
+                    "configuration": "DRIFTGUARD_MAX_REPOSITORY_TREE_ENTRIES",
+                },
             )
         candidates = [
             item
@@ -181,7 +187,12 @@ class RealGitHubInstallationProvider(GitHubInstallationProvider):
                 code="repository_source_limit_exceeded",
                 message="Repository contains too many source files to analyze safely.",
                 status_code=413,
-                details={"maximum": settings.max_repository_source_files},
+                details={
+                    "limit": "source_files",
+                    "actual_files": len(candidates),
+                    "configured_max_files": settings.max_repository_source_files,
+                    "configuration": "DRIFTGUARD_MAX_REPOSITORY_SOURCE_FILES",
+                },
             )
         declared_bytes = sum(int(item.get("size", 0)) for item in candidates)
         if declared_bytes > settings.max_repository_source_bytes:

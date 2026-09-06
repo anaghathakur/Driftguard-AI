@@ -10,6 +10,7 @@ from datetime import UTC, datetime
 from time import perf_counter
 from uuid import uuid4
 
+from apps.api.app.auth.authorization import Permission, authorize
 from apps.api.app.core.exceptions import DriftGuardError
 from apps.api.app.domain.analysis import RepositorySourceType
 from apps.api.app.domain.monitor import (
@@ -52,6 +53,7 @@ class ApiMonitorService:
         self.clock = clock
 
     async def create(self, request: MonitorCreateRequest) -> MonitorResponse:
+        authorize(Permission.MANAGE_MONITORS)
         repository_url, repository_ref = _validated_repository(
             request.repository_url,
             request.repository_ref,
@@ -77,6 +79,7 @@ class ApiMonitorService:
         return monitor_response(monitor)
 
     def list(self) -> list[MonitorResponse]:
+        authorize(Permission.READ_MONITORS)
         return [monitor_response(monitor) for monitor in self.repository.list()]
 
     def get(self, monitor_id: str) -> MonitorResponse:
@@ -87,6 +90,7 @@ class ApiMonitorService:
         monitor_id: str,
         request: MonitorUpdateRequest,
     ) -> MonitorResponse:
+        authorize(Permission.MANAGE_MONITORS)
         monitor = self.require(monitor_id)
         updates: dict[str, object] = {"updated_at": self.clock()}
         fields = request.model_fields_set
@@ -129,10 +133,12 @@ class ApiMonitorService:
         return monitor_response(updated)
 
     def delete(self, monitor_id: str) -> None:
+        authorize(Permission.MANAGE_MONITORS)
         if not self.repository.delete(monitor_id):
             _monitor_not_found()
 
     def require(self, monitor_id: str) -> ApiMonitor:
+        authorize(Permission.READ_MONITORS)
         monitor = self.repository.get(monitor_id)
         if monitor is None:
             _monitor_not_found()
@@ -160,6 +166,7 @@ class MonitorCheckService:
         self._active_guard = asyncio.Lock()
 
     async def check(self, monitor_id: str) -> MonitorCheckResponse:
+        authorize(Permission.RUN_MONITOR_CHECKS)
         await self._claim(monitor_id)
         try:
             return await self._check_claimed(monitor_id)
@@ -168,6 +175,7 @@ class MonitorCheckService:
                 self._active.discard(monitor_id)
 
     def list_checks(self, monitor_id: str) -> list[MonitorCheckResponse]:
+        authorize(Permission.READ_MONITORS)
         if self.repository.get(monitor_id) is None:
             _monitor_not_found()
         return [check_response(check) for check in self.repository.list_checks(monitor_id)]

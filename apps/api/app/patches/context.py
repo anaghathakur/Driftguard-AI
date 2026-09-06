@@ -10,7 +10,7 @@ from apps.api.app.core.config import settings
 from apps.api.app.core.redaction import redact_secrets
 from apps.api.app.domain.repository import ScannedSourceFile
 from apps.api.app.schemas.analysis import PersistedMatchResponse
-from apps.api.app.schemas.comparison import ApiChange
+from apps.api.app.schemas.comparison import ApiChange, ContractType
 from apps.api.app.schemas.migration import MigrationRecommendation
 from apps.api.app.schemas.risk import RiskPrediction
 
@@ -37,6 +37,41 @@ class PatchPrompt:
     user_prompt: str
     redactions_applied: int
     warnings: tuple[str, ...]
+
+
+def scope_patch_context(context: PatchGenerationContext) -> PatchGenerationContext:
+    """Keep repository-matched contract operations and their migration siblings."""
+
+    matched_change_ids = {match.change_id for match in context.matches}
+    matched_scopes = {
+        scope
+        for change in context.changes
+        if change.change_id in matched_change_ids
+        if (scope := _operation_scope(change)) is not None
+    }
+    relevant_changes = tuple(
+        change
+        for change in context.changes
+        if change.change_id in matched_change_ids
+        or (
+            (scope := _operation_scope(change)) is not None
+            and scope in matched_scopes
+        )
+    )
+    relevant_change_ids = {change.change_id for change in relevant_changes}
+    return PatchGenerationContext(
+        analysis_id=context.analysis_id,
+        changes=relevant_changes,
+        matches=tuple(
+            match for match in context.matches if match.change_id in relevant_change_ids
+        ),
+        migrations=tuple(
+            item for item in context.migrations if item.change_id in relevant_change_ids
+        ),
+        risks=tuple(item for item in context.risks if item.change_id in relevant_change_ids),
+        source_files=context.source_files,
+        allowed_files=context.allowed_files,
+    )
 
 
 def build_patch_prompt(
@@ -168,6 +203,14 @@ def _source_window(content: str, relevant_lines: list[int]) -> str:
         end = min(len(lines), line + 12)
         indexes.update(range(start, end))
     return "".join(lines[index] for index in sorted(indexes))[:8_000]
+
+
+def _operation_scope(change: ApiChange) -> tuple[str, ...] | None:
+    if change.contract_type is ContractType.OPENAPI and change.path and change.method:
+        return ("openapi", change.path, change.method.upper())
+    if change.operation_identifier:
+        return (change.contract_type.value, change.operation_identifier)
+    return None
 
 
 def _redact_structure(value: object) -> tuple[object, int]:

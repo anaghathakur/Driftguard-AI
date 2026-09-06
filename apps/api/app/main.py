@@ -11,6 +11,7 @@ from apps.api.app.api.routes.analyses import (
 )
 from apps.api.app.api.routes.auth import router as auth_router
 from apps.api.app.api.routes.automation import router as automation_router
+from apps.api.app.api.routes.contracts import router as contracts_router
 from apps.api.app.api.routes.github_webhooks import router as github_webhooks_router
 from apps.api.app.api.routes.health import (
     router as health_router,
@@ -37,7 +38,7 @@ from apps.api.app.api.routes.specifications import (
 )
 from apps.api.app.api.routes.validations import router as validations_router
 from apps.api.app.auth.middleware import WorkspaceContextMiddleware
-from apps.api.app.core.config import settings
+from apps.api.app.core.config import settings, validate_security_settings
 from apps.api.app.core.dependencies import (
     get_auth_service,
     get_automation_repository,
@@ -58,6 +59,7 @@ OPENAPI_TAGS = [
     {"name": "authentication", "description": "GitHub identity and workspace sessions."},
     {"name": "GitHub repositories", "description": "Authorized GitHub App repositories."},
     {"name": "specifications", "description": "OpenAPI contract comparison."},
+    {"name": "contracts", "description": "OpenAPI and GraphQL contract comparison."},
     {"name": "impact", "description": "Repository-aware change-impact analysis."},
     {"name": "analyses", "description": "Persisted analyses, insights, and reports."},
     {"name": "risk", "description": "Risk-model provenance and status."},
@@ -94,12 +96,13 @@ async def lifespan(_app: FastAPI):
 
 
 def create_app() -> FastAPI:
+    validate_security_settings(settings)
     app = FastAPI(
         title=settings.app_name,
         version="0.1.0",
         description=(
-            "Detect OpenAPI drift, trace repository impact, generate and statically validate "
-            "review-only migration patches, and explicitly prepare human-review Pull Requests."
+            "Detect OpenAPI and GraphQL contract drift, trace repository impact, generate and "
+            "statically validate review-only migration patches and human-review Pull Requests."
         ),
         openapi_tags=OPENAPI_TAGS,
         lifespan=lifespan,
@@ -128,6 +131,10 @@ def create_app() -> FastAPI:
     )
     app.include_router(
         specifications_router,
+        prefix=settings.api_prefix,
+    )
+    app.include_router(
+        contracts_router,
         prefix=settings.api_prefix,
     )
     app.include_router(

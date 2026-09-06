@@ -6,6 +6,7 @@ export type AppPage =
   | "monitors"
   | "analyses"
   | "repositories"
+  | "team"
   | "system-status"
   | "analysis-result";
 
@@ -19,6 +20,8 @@ type AppShellProps = {
   workspaces?: Array<{ id: string; name: string }>;
   activeWorkspaceId?: string | null;
   onSwitchWorkspace?: (workspaceId: string) => void;
+  roleLabel?: string | null;
+  onLogout?: () => void;
 };
 
 const primaryItems: Array<{ page: AppPage; label: string; icon: IconName }> = [
@@ -29,7 +32,7 @@ const primaryItems: Array<{ page: AppPage; label: string; icon: IconName }> = [
   { page: "repositories", label: "Repositories", icon: "repository" },
 ];
 
-type IconName = "overview" | "analysis" | "monitor" | "history" | "repository" | "status";
+type IconName = "overview" | "analysis" | "monitor" | "history" | "repository" | "team" | "status";
 
 export function AppShell({
   activePage,
@@ -41,6 +44,8 @@ export function AppShell({
   workspaces = [],
   activeWorkspaceId,
   onSwitchWorkspace,
+  roleLabel,
+  onLogout,
 }: AppShellProps) {
   const navigationPage = activePage === "analysis-result" ? "analyses" : activePage;
   const statusLabel =
@@ -74,6 +79,12 @@ export function AppShell({
         <div className="sidebar-system">
           <p className="sidebar-section-label">System</p>
           <NavigationButton
+            active={navigationPage === "team"}
+            icon="team"
+            label="Team & Profile"
+            onClick={() => onNavigate("team")}
+          />
+          <NavigationButton
             active={navigationPage === "system-status"}
             icon="status"
             label="System Status"
@@ -82,11 +93,13 @@ export function AppShell({
           <div className="workspace-status">
             <SystemIndicator ready={backendReady} label={statusLabel} />
             {userLabel && <small>{userLabel}</small>}
+            {roleLabel && <small className="workspace-role">{roleLabel}</small>}
             {workspaces.length > 1 && onSwitchWorkspace ? (
               <select aria-label="Active workspace" value={activeWorkspaceId ?? ""} onChange={(event) => onSwitchWorkspace(event.target.value)}>
                 {workspaces.map((workspace) => <option key={workspace.id} value={workspace.id}>{workspace.name}</option>)}
               </select>
             ) : <span>{workspaceLabel}</span>}
+            {onLogout && <button type="button" className="sidebar-logout" onClick={onLogout}>Sign out</button>}
           </div>
         </div>
       </aside>
@@ -109,6 +122,13 @@ export function AppShell({
           icon="status"
           label="Status"
           onClick={() => onNavigate("system-status")}
+          mobile
+        />
+        <NavigationButton
+          active={navigationPage === "team"}
+          icon="team"
+          label="Team"
+          onClick={() => onNavigate("team")}
           mobile
         />
       </nav>
@@ -178,6 +198,7 @@ function Icon({ name }: { name: IconName }) {
     analysis: <><path d="M4 19V5a2 2 0 0 1 2-2h8l6 6v10a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2Z"/><path d="M14 3v6h6M8 15h8M12 11v8"/></>,
     monitor: <><path d="M3 12h4l2-5 4 10 2-5h6"/><rect x="3" y="3" width="18" height="18" rx="3"/></>,
     repository: <><path d="M4 7h16v12H4z"/><path d="M8 7V5h8v2M8 12h8M8 16h5"/></>,
+    team: <><circle cx="9" cy="8" r="3"/><circle cx="17" cy="9" r="2"/><path d="M3 20c0-4 2-6 6-6s6 2 6 6M15 15c3 0 5 1.5 5 4"/></>,
     history: <><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5M12 7v5l3 2"/></>,
     status: <><circle cx="12" cy="12" r="9"/><path d="m8 12 2.5 2.5L16 9"/></>,
   };

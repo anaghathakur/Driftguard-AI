@@ -12,6 +12,7 @@ from apps.api.app.core.config import settings
 from apps.api.app.core.exceptions import DriftGuardError
 from apps.api.app.core.redaction import redact_secrets
 from apps.api.app.domain.repository import RepositoryScan
+from apps.api.app.graphql.validation import validate_graphql_document
 from apps.api.app.repository.code_analyzer import validate_javascript_syntax
 from apps.api.app.schemas.patch import (
     GeneratedPatchContent,
@@ -159,6 +160,8 @@ def _validate_language(path: str, content: str) -> None:
             ast.parse(content, filename=path)
         elif suffix in _JS_SUFFIXES:
             validate_javascript_syntax(content)
+        elif suffix in {".graphql", ".gql"}:
+            validate_graphql_document(content)
         else:
             _error(
                 "patch_validation_failed",

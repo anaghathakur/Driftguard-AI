@@ -50,6 +50,7 @@ from apps.api.app.infrastructure.sqlite_workspace_repository import (
     SQLiteWorkspaceRepository,
 )
 from apps.api.app.migration.provider import (
+    DeterministicMigrationRecommendationProvider,
     GeminiMigrationRecommendationProvider,
     MigrationRecommendationProvider,
     MockMigrationRecommendationProvider,
@@ -67,6 +68,7 @@ from apps.api.app.monitoring.specification_source import (
     OpenApiSpecificationSource,
 )
 from apps.api.app.patches.provider import (
+    DeterministicPatchGenerationProvider,
     GeminiPatchGenerationProvider,
     MockPatchGenerationProvider,
     PatchGenerationProvider,
@@ -92,6 +94,7 @@ from apps.api.app.services.analysis_pipeline import (
     AnalysisPipelineService,
 )
 from apps.api.app.validation.provider import (
+    DeterministicTestPlanProvider,
     GeminiTestPlanProvider,
     MockTestPlanProvider,
     TestPlanProvider,
@@ -269,7 +272,7 @@ def get_risk_classifier() -> RiskClassifier:
 
 @lru_cache
 def get_migration_provider() -> MigrationRecommendationProvider:
-    if settings.ai_provider == "gemini":
+    if settings.migration_provider == "gemini":
         return GeminiMigrationRecommendationProvider(
             api_key=settings.gemini_api_key,
             model_name=settings.gemini_model,
@@ -277,10 +280,15 @@ def get_migration_provider() -> MigrationRecommendationProvider:
             max_retries=settings.ai_max_retries,
         )
 
-    if settings.ai_provider == "mock":
+    if settings.migration_provider == "deterministic":
+        return DeterministicMigrationRecommendationProvider()
+
+    if settings.migration_provider == "mock":
         return MockMigrationRecommendationProvider()
 
-    raise RuntimeError("DRIFTGUARD_AI_PROVIDER must be either 'mock' or 'gemini'")
+    raise RuntimeError(
+        "DRIFTGUARD_MIGRATION_PROVIDER must be 'deterministic', 'gemini', or 'mock'"
+    )
 
 
 @lru_cache
@@ -289,6 +297,7 @@ def get_migration_recommendation_service() -> MigrationRecommendationService:
         get_migration_provider(),
         prompt_version=settings.ai_prompt_version,
         schema_version=settings.ai_schema_version,
+        allow_deterministic_fallback=settings.deployment_environment != "production",
     )
 
 
@@ -322,7 +331,7 @@ def get_github_repository_source() -> GitHubRepositorySource:
 
 @lru_cache
 def get_patch_provider() -> PatchGenerationProvider:
-    if settings.ai_provider == "gemini":
+    if settings.patch_provider == "gemini":
         return GeminiPatchGenerationProvider(
             api_key=settings.gemini_api_key,
             model_name=settings.gemini_model,
@@ -330,7 +339,13 @@ def get_patch_provider() -> PatchGenerationProvider:
             max_retries=settings.ai_max_retries,
             sender=_send_json,
         )
-    return MockPatchGenerationProvider()
+    if settings.patch_provider == "deterministic":
+        return DeterministicPatchGenerationProvider()
+    if settings.patch_provider == "mock":
+        return MockPatchGenerationProvider()
+    raise RuntimeError(
+        "DRIFTGUARD_PATCH_PROVIDER must be 'deterministic', 'gemini', or 'mock'"
+    )
 
 
 def get_patch_proposal_service(
@@ -354,9 +369,13 @@ def get_test_plan_provider() -> TestPlanProvider:
             max_retries=settings.ai_max_retries,
             sender=_send_json,
         )
+    if settings.test_plan_provider == "deterministic":
+        return DeterministicTestPlanProvider()
     if settings.test_plan_provider == "mock":
         return MockTestPlanProvider()
-    raise RuntimeError("DRIFTGUARD_TEST_PLAN_PROVIDER must be either 'mock' or 'gemini'")
+    raise RuntimeError(
+        "DRIFTGUARD_TEST_PLAN_PROVIDER must be 'deterministic', 'gemini', or 'mock'"
+    )
 
 
 def get_patch_validation_service(

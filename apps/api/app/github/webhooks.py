@@ -30,8 +30,10 @@ CONTRACT_NAMES = {
     "swagger.json",
     "swagger.yaml",
     "swagger.yml",
+    "schema.graphql",
+    "schema.gql",
 }
-LIKELY_DIRECTORIES = {"api", "docs", "spec", "specs", "openapi", "contracts"}
+LIKELY_DIRECTORIES = {"api", "docs", "spec", "specs", "openapi", "graphql", "contracts"}
 METADATA_NAMES = {
     "package.json",
     "pyproject.toml",
@@ -274,7 +276,7 @@ def is_relevant_path(path: str, known_contracts: set[str] | frozenset[str] = fro
     name = pure.name.lower()
     if normalized in known_contracts or name in CONTRACT_NAMES or name in METADATA_NAMES:
         return True
-    return pure.suffix.lower() in {".json", ".yaml", ".yml"} and bool(
+    return pure.suffix.lower() in {".json", ".yaml", ".yml", ".graphql", ".gql"} and bool(
         set(part.lower() for part in pure.parts[:-1]) & LIKELY_DIRECTORIES
     )
 

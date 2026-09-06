@@ -8,9 +8,11 @@ from dataclasses import asdict
 from datetime import UTC, datetime
 from uuid import NAMESPACE_URL, uuid5
 
+from apps.api.app.auth.authorization import Permission, authorize
 from apps.api.app.core.config import settings
 from apps.api.app.core.exceptions import DriftGuardError
 from apps.api.app.domain.analysis import RepositorySourceType
+from apps.api.app.graphql.validation import validate_graphql_contract
 from apps.api.app.patches.validator import validate_patch
 from apps.api.app.ports.analysis_repository import AnalysisRepository
 from apps.api.app.repository.code_analyzer import RepositoryCodeAnalyzer
@@ -32,14 +34,15 @@ from apps.api.app.validation.engine import (
     validate_contract,
     validate_dependencies,
 )
+from apps.api.app.validation.execution import ValidationExecutionEngine
 from apps.api.app.validation.provider import (
-    MockTestPlanProvider,
+    DeterministicTestPlanProvider,
     TestPlanContext,
     TestPlanProvider,
     TestPlanProviderError,
 )
 
-VALIDATION_PROFILE_VERSION = "1.0.0"
+VALIDATION_PROFILE_VERSION = "2.0.0"
 
 
 class PatchValidationService:
@@ -61,6 +64,7 @@ class PatchValidationService:
         repository_content: bytes | None = None,
         repository_filename: str | None = None,
     ) -> PatchValidationRun:
+        authorize(Permission.VALIDATE_PATCH)
         analysis = self.repository.get_analysis(analysis_id)
         if analysis is None:
             raise DriftGuardError(
@@ -87,6 +91,7 @@ class PatchValidationService:
             source_hash=scan.archive_sha256,
             provider=self.provider.name.value,
             model=self.provider.model_name,
+            execution_provider=settings.validation_execution_provider,
         )
         existing = self.repository.get_patch_validation_by_fingerprint(
             analysis_id, patch_id, fingerprint
@@ -113,7 +118,11 @@ class PatchValidationService:
         original_graph = analyzer.analyze(scan)
         patched_graph = analyzer.analyze(patched)
 
-        contract_findings = validate_contract(changes, patched_graph, patched)
+        contract_findings = (
+            validate_graphql_contract(changes, patched)
+            if any(change.contract_type.value == "graphql" for change in changes)
+            else validate_contract(changes, patched_graph, patched)
+        )
         dependency_findings = validate_dependencies(
             changes, scan, patched, original_graph, patched_graph, proposal
         )
@@ -166,10 +175,16 @@ class PatchValidationService:
             )
         except TestPlanProviderError as exc:
             if self.provider.name.value != "mock":
+                if settings.deployment_environment == "production":
+                    raise DriftGuardError(
+                        code="test_plan_provider_unavailable",
+                        message="The configured test-plan provider is currently unavailable.",
+                        status_code=503,
+                    ) from exc
                 warnings.append(
                     "Configured test-plan provider failed; deterministic recommendations were used."
                 )
-                fallback = MockTestPlanProvider()
+                fallback = DeterministicTestPlanProvider()
                 result_provider = fallback
                 test_plan = fallback.generate(
                     context,
@@ -189,7 +204,13 @@ class PatchValidationService:
         counts = {
             status: sum(item.status == status for item in all_findings) for status in FindingStatus
         }
-        readiness = _readiness(all_findings, test_gaps)
+        execution = ValidationExecutionEngine(
+            provider=settings.validation_execution_provider,
+            deployment_environment=settings.deployment_environment,
+            timeout_seconds=settings.validation_command_timeout_seconds,
+            output_max_bytes=settings.validation_output_max_bytes,
+        ).execute(scan, trusted.modified_sources)
+        readiness = _readiness(all_findings, test_gaps, execution.status.value)
         run = PatchValidationRun(
             validation_id=str(uuid5(NAMESPACE_URL, f"driftguard-validation:{fingerprint}")),
             patch_id=patch_id,
@@ -216,7 +237,8 @@ class PatchValidationService:
             direct_impacted_files=direct_files,
             transitive_impacted_files=transitive_files,
             unrelated_modified_files=unrelated,
-            static_only=True,
+            execution=execution,
+            static_only=not bool(execution.commands),
         )
         return self.repository.save_patch_validation(run)
 
@@ -255,6 +277,7 @@ class PatchValidationService:
         return run
 
     def _require_patch(self, analysis_id: str, patch_id: str) -> None:
+        authorize(Permission.READ_ANALYSES)
         if self.repository.get_analysis(analysis_id) is None:
             raise DriftGuardError(
                 code="analysis_not_found",
@@ -313,18 +336,28 @@ class PatchValidationService:
         return scan
 
 
-def _readiness(findings, gaps) -> ValidationReadiness:
+def _readiness(findings, gaps, execution_status: str = "not_configured") -> ValidationReadiness:
+    if execution_status in {"failed", "blocked"}:
+        return ValidationReadiness.BLOCKED
     if any(item.status == FindingStatus.FAIL for item in findings):
         return ValidationReadiness.BLOCKED
     if any(item.status in {FindingStatus.WARNING, FindingStatus.UNKNOWN} for item in findings):
         return ValidationReadiness.NEEDS_REVIEW
     if any(gap.impact_depth == 0 for gap in gaps):
         return ValidationReadiness.NEEDS_REVIEW
+    if execution_status == "partial":
+        return ValidationReadiness.NEEDS_REVIEW
     return ValidationReadiness.READY_FOR_REVIEW
 
 
 def _validation_fingerprint(
-    *, analysis_id: str, patch_id: str, source_hash: str, provider: str, model: str
+    *,
+    analysis_id: str,
+    patch_id: str,
+    source_hash: str,
+    provider: str,
+    model: str,
+    execution_provider: str = "disabled",
 ) -> str:
     value = json.dumps(
         {
@@ -334,6 +367,7 @@ def _validation_fingerprint(
             "validation_profile_version": VALIDATION_PROFILE_VERSION,
             "provider": provider,
             "model": model,
+            "execution_provider": execution_provider,
         },
         sort_keys=True,
         separators=(",", ":"),

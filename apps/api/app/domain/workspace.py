@@ -9,7 +9,10 @@ from enum import StrEnum
 
 class WorkspaceRole(StrEnum):
     OWNER = "owner"
-    MEMBER = "member"
+    ADMIN = "admin"
+    DEVELOPER = "developer"
+    VIEWER = "viewer"
+    MEMBER = "developer"  # Backward-compatible code alias; persisted `member` is migrated.
 
 
 @dataclass(frozen=True, slots=True)
@@ -21,6 +24,9 @@ class User:
     avatar_url: str | None
     created_at: datetime
     updated_at: datetime
+    external_auth_provider: str = "github"
+    external_subject: str | None = None
+    email: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -30,6 +36,7 @@ class Workspace:
     slug: str
     created_at: datetime
     updated_at: datetime
+    created_by_user_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

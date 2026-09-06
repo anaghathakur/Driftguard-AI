@@ -1,5 +1,5 @@
 const API_BASE_URL =
-  import.meta.env.VITE_API_BASE_URL ?? "http://127.0.0.1:8000";
+  import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000";
 
 export type ReadinessStatus = {
   status: "ready" | "not_ready";
@@ -27,6 +27,7 @@ export type MigrationProviderStatus = {
   warning: string | null;
 };
 
+export type ContractTypeSelection = "auto" | "openapi" | "graphql";
 export type ApiChange = {
   change_id: string;
   change_type: string;
@@ -39,6 +40,15 @@ export type ApiChange = {
   category: string;
   severity: string;
   explanation: string;
+  contract_type?: "openapi" | "graphql";
+  operation_kind?: string;
+  operation_identifier?: string | null;
+  contract_location?: string | null;
+  old_type?: string | null;
+  new_type?: string | null;
+  old_required?: boolean | null;
+  new_required?: boolean | null;
+  metadata?: Record<string, unknown>;
 };
 
 export type ComparisonSummary = {
@@ -203,9 +213,9 @@ export type PatchProposal = {
   created_at: string;
   status: "validated";
   summary: string;
-  provider: "mock" | "gemini";
+  provider: "mock" | "gemini" | "deterministic";
   provider_model: string;
-  provider_mode: "deterministic_mock" | "external";
+  provider_mode: "deterministic_mock" | "evidence_based" | "external";
   patch_profile_version: string;
   source_repository_hash: string;
   request_fingerprint: string;
@@ -298,15 +308,35 @@ export type PatchValidationRun = {
       priority: "high" | "medium" | "low";
     }>;
   };
-  provider: "mock" | "gemini";
+  provider: "mock" | "gemini" | "deterministic";
   provider_model: string;
-  provider_mode: "deterministic_mock" | "external";
+  provider_mode: "deterministic_mock" | "deterministic" | "external";
   warnings: string[];
   modified_files: string[];
   direct_impacted_files: string[];
   transitive_impacted_files: string[];
   unrelated_modified_files: string[];
-  static_only: true;
+  execution: {
+    status: "passed" | "failed" | "partial" | "not_configured" | "blocked";
+    ecosystem: string | null;
+    commands: Array<{
+      category: string;
+      display_name: string;
+      argv: string[];
+      exit_code: number | null;
+      timed_out: boolean;
+      duration_ms: number;
+      stdout_summary: string;
+      stderr_summary: string;
+      output_truncated: boolean;
+    }>;
+    checks: string[];
+    duration_ms: number;
+    isolated_temporary_copy: boolean;
+    original_repository_unchanged: boolean;
+    message: string;
+  } | null;
+  static_only: boolean;
 };
 
 export type PatchValidationListItem = Pick<
@@ -333,7 +363,7 @@ export type PullRequestPreview = {
   files_changed: number;
   edit_count: number;
   validation_readiness: "ready_for_review";
-  tests_executed: false;
+  tests_executed: boolean;
 };
 
 export type GitHubPullRequestRecord = {
@@ -361,7 +391,7 @@ export type GitHubPullRequestRecord = {
   modified_file_sha256: Record<string, string>;
   failure_code: string | null;
   failure_message: string | null;
-  tests_executed: false;
+  tests_executed: boolean;
 };
 
 export type PullRequestListItem = Pick<
@@ -471,14 +501,16 @@ export async function getMigrationProviderStatus(): Promise<MigrationProviderSta
 export async function compareSpecifications(
   oldSpec: File,
   newSpec: File,
+  contractType: ContractTypeSelection = "auto",
 ): Promise<ComparisonResponse> {
   const formData = new FormData();
 
-  formData.append("old_spec", oldSpec);
-  formData.append("new_spec", newSpec);
+  formData.append("old_contract", oldSpec);
+  formData.append("new_contract", newSpec);
+  formData.append("contract_type", contractType);
 
   return requestJson<ComparisonResponse>(
-    "/api/v1/specifications/compare",
+    "/api/v1/contracts/compare",
     {
       method: "POST",
       body: formData,
@@ -490,12 +522,14 @@ export async function analyzeRepositoryImpact(
   oldSpec: File,
   newSpec: File,
   repository: File,
+  contractType: ContractTypeSelection = "auto",
 ): Promise<ImpactAnalysisResponse> {
   const formData = new FormData();
 
   formData.append("old_spec", oldSpec);
   formData.append("new_spec", newSpec);
   formData.append("repository", repository);
+  formData.append("contract_type", contractType);
 
   return requestJson<ImpactAnalysisResponse>(
     "/api/v1/impact/analyze",
@@ -511,12 +545,14 @@ export async function analyzeConnectedRepositoryImpact(
   newSpec: File,
   repositoryId: string,
   ref?: string,
+  contractType: ContractTypeSelection = "auto",
 ): Promise<ImpactAnalysisResponse> {
   const formData = new FormData();
   formData.append("old_spec", oldSpec);
   formData.append("new_spec", newSpec);
   formData.append("repository_id", repositoryId);
   if (ref?.trim()) formData.append("ref", ref.trim());
+  formData.append("contract_type", contractType);
   return requestJson<ImpactAnalysisResponse>("/api/v1/impact/analyze/connected", {
     method: "POST",
     body: formData,
@@ -528,12 +564,14 @@ export async function analyzeGitHubRepositoryImpact(
   newSpec: File,
   repositoryUrl: string,
   ref?: string,
+  contractType: ContractTypeSelection = "auto",
 ): Promise<ImpactAnalysisResponse> {
   const formData = new FormData();
 
   formData.append("old_spec", oldSpec);
   formData.append("new_spec", newSpec);
   formData.append("repository_url", repositoryUrl.trim());
+  formData.append("contract_type", contractType);
 
   if (ref?.trim()) {
     formData.append("ref", ref.trim());
@@ -601,6 +639,7 @@ export async function getAnalysisPdf(
 ): Promise<Blob> {
   const response = await fetch(
     `${API_BASE_URL}/api/v1/analyses/${analysisId}/report.pdf`,
+    { credentials: "include" },
   );
 
   if (!response.ok) {
@@ -772,11 +811,24 @@ export async function getMonitorChecks(
   );
 }
 
-export type WorkspaceSummary = { id: string; name: string; slug: string; role: "owner" | "member" };
+export type WorkspaceRole = "owner" | "admin" | "developer" | "viewer";
+export type WorkspaceSummary = { id: string; name: string; slug: string; role: WorkspaceRole };
+export type WorkspaceMember = {
+  user_id: string;
+  github_login: string;
+  github_display_name: string | null;
+  avatar_url: string | null;
+  email: string | null;
+  role: WorkspaceRole;
+  joined_at: string;
+};
 export type AuthStatus = {
   mode: "local" | "github";
   authenticated: boolean;
-  user: { id: string; github_login: string; github_display_name: string | null; avatar_url: string | null } | null;
+  development_auth: boolean;
+  github_auth_configured: boolean;
+  google_auth_configured: boolean;
+  user: { id: string; github_login: string; github_display_name: string | null; avatar_url: string | null; auth_provider: string; email: string | null } | null;
   workspace: WorkspaceSummary | null;
   workspaces: WorkspaceSummary[];
   csrf_token: string | null;
@@ -792,8 +844,15 @@ export async function getAuthStatus(): Promise<AuthStatus> {
   return status;
 }
 
-export function githubSignInUrl(): string {
-  return `${API_BASE_URL}/api/v1/auth/github/start`;
+export function githubSignInUrl(
+  identity?: "primary" | "secondary",
+  returnTo?: string,
+): string {
+  const query = new URLSearchParams();
+  if (identity) query.set("identity", identity);
+  if (returnTo) query.set("return_to", returnTo);
+  const suffix = query.size ? "?" + query.toString() : "";
+  return API_BASE_URL + "/api/v1/auth/github/start" + suffix;
 }
 export function githubInstallationStartUrl(): string {
   return `${API_BASE_URL}/api/v1/github/installations/start`;
@@ -813,6 +872,46 @@ export async function switchWorkspace(workspaceId: string): Promise<WorkspaceSum
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ workspace_id: workspaceId }),
   });
+}
+
+export async function getWorkspaceMembers(): Promise<WorkspaceMember[]> {
+  return requestJson<WorkspaceMember[]>("/api/v1/auth/workspaces/current/members");
+}
+
+export async function updateWorkspaceMemberRole(
+  userId: string,
+  role: WorkspaceRole,
+): Promise<WorkspaceMember> {
+  return requestJson<WorkspaceMember>(
+    `/api/v1/auth/workspaces/current/members/${userId}`,
+    {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ role }),
+    },
+  );
+}
+
+export async function removeWorkspaceMember(userId: string): Promise<void> {
+  const response = await fetch(
+    `${API_BASE_URL}/api/v1/auth/workspaces/current/members/${userId}`,
+    {
+      method: "DELETE",
+      credentials: "include",
+      headers: csrfToken ? { "X-CSRF-Token": csrfToken } : undefined,
+    },
+  );
+  if (!response.ok) throw new Error(await getErrorMessage(response));
+}
+
+export async function logout(): Promise<void> {
+  const response = await fetch(`${API_BASE_URL}/api/v1/auth/logout`, {
+    method: "POST",
+    credentials: "include",
+    headers: csrfToken ? { "X-CSRF-Token": csrfToken } : undefined,
+  });
+  if (!response.ok) throw new Error(await getErrorMessage(response));
+  csrfToken = null;
 }
 
 export async function getGitHubInstallations(): Promise<GitHubInstallation[]> {
@@ -842,12 +941,36 @@ export async function requestJson<T>(
   path: string,
   options?: RequestInit,
 ): Promise<T> {
-  const response = await fetch(
-    `${API_BASE_URL}${path}`,
-    options,
-  );
+  const method = (options?.method ?? "GET").toUpperCase();
+  const headers = new Headers(options?.headers);
+  if (
+    csrfToken &&
+    method !== "GET" &&
+    method !== "HEAD" &&
+    method !== "OPTIONS"
+  ) {
+    headers.set("X-CSRF-Token", csrfToken);
+  }
+  let response: Response;
+  try {
+    response = await fetch(
+      `${API_BASE_URL}${path}`,
+      {
+        ...options,
+        credentials: "include",
+        headers,
+      },
+    );
+  } catch {
+    throw new Error(
+      "DriftGuard could not reach the API. Check that the service is running and try again.",
+    );
+  }
 
   if (!response.ok) {
+    if (response.status === 401 && path !== "/api/v1/auth/status") {
+      window.dispatchEvent(new Event("driftguard:session-expired"));
+    }
     throw new Error(await getErrorMessage(response));
   }
 

@@ -4,7 +4,7 @@
 
 **Detect breaking API changes before they break production code.**
 
-DriftGuard AI is an API Change Impact & Migration Intelligence Platform that detects OpenAPI contract drift, identifies affected source code across repositories, estimates migration risk, generates migration guidance, proposes bounded code changes, validates those changes statically, discovers related tests, and prepares human-reviewed GitHub Pull Requests.
+DriftGuard AI is an API Change Impact & Migration Intelligence Platform that detects OpenAPI 3.x and GraphQL SDL contract drift, identifies affected source code across repositories, estimates migration risk, generates migration guidance, proposes bounded code changes, validates those changes statically, discovers related tests, and prepares human-reviewed GitHub Pull Requests.
 
 The platform is designed around one principle:
 
@@ -67,7 +67,7 @@ The frontend organizes the migration workflow into five stages:
 
 ### 1. Detect
 
-Compare an existing OpenAPI specification with a newer version.
+Compare an existing OpenAPI 3.x or GraphQL SDL contract with a newer version.
 
 DriftGuard classifies changes as:
 
@@ -75,7 +75,7 @@ DriftGuard classifies changes as:
 - potentially breaking
 - non-breaking
 
-Examples include removed endpoints, newly required request fields, removed fields, and method or contract changes.
+Examples include removed endpoints, newly required request fields, removed GraphQL fields or arguments, nullability changes, and changed types.
 
 ### 2. Understand
 
@@ -155,11 +155,15 @@ DriftGuard never automatically merges or deploys the Pull Request.
 
 ## Key Features
 
-### OpenAPI Contract Comparison
+### Multi-contract Comparison
 
-DriftGuard accepts OpenAPI 3.x JSON and YAML documents and performs deterministic contract comparison.
+DriftGuard accepts OpenAPI 3.x JSON/YAML and GraphQL SDL `.graphql`/`.gql` documents and performs deterministic contract comparison through an internal adapter layer.
 
 The comparison pipeline supports local JSON Pointer `$ref` resolution and identifies API changes relevant to migration impact.
+
+For GraphQL, it statically validates SDL and classifies type, field, input-field, argument, enum, nullability, list-shape, and return-type changes. Stable operation identities such as `Mutation.createPayment` flow through the same impact, risk, migration, patch, validation, report, and GitHub Check pipeline as HTTP operations.
+
+The existing `POST /api/v1/specifications/compare` route remains the OpenAPI-compatible API. New clients can use `POST /api/v1/contracts/compare` with `contract_type=auto|openapi|graphql`.
 
 ---
 
@@ -376,11 +380,15 @@ The provider system is replaceable.
 Supported modes include:
 
 ```text
+deterministic
 mock
 gemini
 ```
 
-The deterministic mock provider is suitable for local development and demonstrations.
+The deterministic provider is the default rules-based migration planner. It derives guidance
+from normalized contract changes, impact evidence, and risk metadata without requiring an LLM.
+The mock provider is retained only for explicit development/test compatibility and is never
+accepted by production configuration.
 
 Optional Gemini integration receives bounded, structured, secret-redacted context rather than an entire repository.
 
@@ -621,9 +629,102 @@ Repeated creation requests can reconcile an existing DriftGuard branch, commit, 
 
 ---
 
-## GitHub Authentication
+## Authentication, Workspaces, and Tenant Isolation
 
-The default GitHub write provider is:
+The web application has separate public and protected entry points. `/` is the public product
+landing page; `/login` and `/signup` present configured identity providers; `/app` and its child
+routes require an authenticated session when GitHub auth mode is enabled. The deterministic user A
+and user B identities are exposed only at `/dev/login` when both
+`DRIFTGUARD_ENVIRONMENT=development` and `DRIFTGUARD_GITHUB_OAUTH_PROVIDER=mock` are set.
+
+GitHub OAuth is the implemented external identity provider. Google sign-in is shown as unavailable
+unless a future backend provider is added; DriftGuard does not simulate Google authentication.
+
+DriftGuard separates developer identity from repository authorization:
+
+~~~text
+GitHub OAuth login              GitHub App installation
+        ↓                                ↓
+user + secure browser session  workspace-authorized repositories
+        ↓                                ↓
+verified workspace membership  immutable source / PR operations
+~~~
+
+GitHub OAuth identifies the person using DriftGuard. A GitHub App installation independently
+authorizes repository access for one DriftGuard workspace. OAuth access does not grant repository
+access, and a GitHub installation cannot be selected for another workspace.
+
+Browser sessions use an opaque, server-hashed session token in an HttpOnly SameSite cookie.
+Authenticated state-changing requests also require the server-issued CSRF token. The React client
+keeps that token in memory, includes credentials explicitly, and does not store long-lived auth
+material in localStorage.
+
+Every request resolves a server-side active workspace and verifies current membership before a
+central permission check. Persisted analysis and monitor queries are scoped by workspace; child
+patch, validation, report, and Pull Request operations first resolve their workspace-scoped parent.
+GitHub installations, repository connections, contracts, dependencies, Check Runs, automation
+jobs, and audit events carry the same workspace boundary. Webhooks resolve workspace ownership
+only from the trusted installation mapping.
+
+On a user's first successful OAuth callback, DriftGuard idempotently creates one personal
+workspace and an Owner membership, then sends the user to `/app/onboarding`. Returning users reuse
+their existing memberships. Onboarding offers only real next steps: connect a GitHub App
+installation or compare uploaded contracts.
+
+Roles are intentionally small:
+
+- **Owner:** all workspace capabilities, including owner-sensitive organization operations.
+- **Admin:** member, repository, analysis, monitor, patch, validation, and PR operations, but no
+  owner-only organization action and no ability to modify owners or peer admins.
+- **Developer:** read resources; run analyses and monitor checks; generate and validate patches;
+  create eligible Pull Requests.
+- **Viewer:** read-only access to workspace resources, reports, and audit history.
+
+The final owner cannot be removed or demoted. Cross-workspace identifiers are resolved within the
+active workspace and fail without returning the other tenant's data.
+
+### Local development authentication
+
+The default is the deterministic Local Workspace:
+
+~~~dotenv
+DRIFTGUARD_ENVIRONMENT=development
+DRIFTGUARD_AUTH_MODE=local
+~~~
+
+Historical SQLite rows are migrated additively into the stable Local Workspace identifier. Existing
+analyses, patches, validations, monitors, PR metadata, and repository configuration are retained.
+The legacy membership role **member** is migrated to **developer**.
+
+To exercise the GitHub login flow locally, configure:
+
+~~~dotenv
+DRIFTGUARD_ENVIRONMENT=development
+DRIFTGUARD_AUTH_MODE=github
+DRIFTGUARD_GITHUB_OAUTH_PROVIDER=github
+DRIFTGUARD_SESSION_SECRET=replace-with-at-least-32-random-characters
+DRIFTGUARD_GITHUB_OAUTH_CLIENT_ID=replace-me
+DRIFTGUARD_GITHUB_OAUTH_CLIENT_SECRET=replace-me
+DRIFTGUARD_GITHUB_OAUTH_CALLBACK_URL=http://localhost:8000/api/v1/auth/github/callback
+DRIFTGUARD_FRONTEND_URL=http://localhost:5173
+~~~
+
+For production, set **DRIFTGUARD_ENVIRONMENT=production**. Startup fails closed unless GitHub auth,
+real OAuth credentials, a strong session secret, secure cookies, and HTTPS frontend/callback URLs
+are configured. Local auth, mock OAuth, mock migration/patch/test-plan providers, mock GitHub
+writes, and mock GitHub Checks are prohibited in production. A configured external migration or
+test-plan provider failure returns an explicit unavailable response in production instead of
+silently returning development mock output. Deterministic migration and patch planning remain
+available without external credentials.
+
+Current membership management supports listing members, role changes, and removal. Invitation
+delivery, SSO/SAML, SCIM, billing, and enterprise policy controls are intentionally deferred.
+
+---
+
+## GitHub Pull Request Authentication
+
+The default GitHub write provider in the local example is:
 
 ```text
 mock
@@ -794,11 +895,13 @@ DriftGuard is implemented as a modular FastAPI monolith with explicit service an
 flowchart TD
     UI[React / TypeScript Dashboard]
 
-    SPEC[OpenAPI V1 / V2]
+    OPENAPI[OpenAPI 3.x V1 / V2]
+    GRAPHQL[GraphQL SDL V1 / V2]
+    ADAPTERS[OpenAPI Adapter / GraphQL Adapter]
     MON[API Monitor]
 
     API[FastAPI API Layer]
-    DIFF[Contract Diff Engine]
+    DIFF[Normalized Contract Changes]
     REPO[Secure Repository Acquisition]
     STATIC[Static Code Intelligence]
     ML[Migration Risk Model]
@@ -810,11 +913,13 @@ flowchart TD
 
     DB[(SQLite / Firestore)]
 
-    SPEC --> API
+    OPENAPI --> API
+    GRAPHQL --> API
     MON --> API
     UI --> API
 
-    API --> DIFF
+    API --> ADAPTERS
+    ADAPTERS --> DIFF
     DIFF --> REPO
     REPO --> STATIC
     STATIC --> ML
@@ -897,7 +1002,7 @@ deterministic fallback
 ### AI
 
 ```text
-Deterministic mock providers
+Deterministic migration, patch, and test-plan providers
 Optional Gemini provider
 Structured outputs
 Bounded context
@@ -948,7 +1053,9 @@ Copy-Item .env.example .env
 
 Do not commit `.env`.
 
-The default local configuration should use local persistence and mock providers so the main product workflow can run without external AI or GitHub write credentials.
+The default local configuration uses local persistence and deterministic providers so the main
+product workflow can run without external AI credentials. GitHub writes remain mock in local
+development until a server-owned GitHub App is configured.
 
 ### 5. Start the backend
 
@@ -1092,6 +1199,20 @@ curl.exe -X POST http://127.0.0.1:8000/api/v1/specifications/compare `
   -F "old_spec=@sample-data/specifications/payments-old.yaml" `
   -F "new_spec=@sample-data/specifications/payments-new.yaml"
 ```
+GraphQL demo contracts can be compared through the generic route:
+
+```powershell
+curl.exe -X POST http://127.0.0.1:8000/api/v1/contracts/compare `
+  -F "old_contract=@sample-data/specifications/graphql/payments-old.graphql" `
+  -F "new_contract=@sample-data/specifications/graphql/payments-new.graphql" `
+  -F "contract_type=graphql"
+```
+
+The matching static consumer fixture is:
+
+```text
+sample-data/repositories/graphql-payment-client/
+```
 
 ---
 
@@ -1142,6 +1263,26 @@ ref
 `ref` may be a branch, tag, or commit.
 
 GitHub acquisition validates trusted GitHub/codeload redirects and enforces repository archive limits before passing content to the secure repository scanner.
+
+The public-URL path scans the downloaded ZIP and bounds total archive entries with
+`DRIFTGUARD_MAX_REPOSITORY_FILES`. Connected GitHub ingestion first bounds GitHub's recursive
+tree response with `DRIFTGUARD_MAX_REPOSITORY_TREE_ENTRIES`, then downloads only eligible source
+blobs. Limit errors identify the exact boundary and report observed and configured values.
+
+The production-oriented defaults remain bounded but accommodate the measured Saleor Dashboard
+case: its August 2026 `main` snapshot contained 7,770 Git tree entries, 7,771 ZIP entries, and a
+1,450,995-byte generated TypeScript source file; the paired Saleor GraphQL schemas measured about
+69,000 AST nodes. Defaults therefore allow 10,000 ZIP entries, 20,000 Git tree entries, 7,500
+eligible source files, 2 MiB per source file, and 100,000 GraphQL AST nodes. The independent 5 MiB
+GraphQL document, depth-100 AST, 1,000-change, 20 MiB compressed archive, 50 MiB uncompressed
+archive, 25 MiB eligible-source, compression-ratio, code-symbol, and graph-edge bounds still apply.
+Operators should tune these values from observed workloads without disabling the bounds.
+
+For a GitHub-App-connected repository, **Discover contracts** synchronously resolves the current
+default branch to an immutable commit, scans supported candidate paths, validates OpenAPI/GraphQL
+contracts, and persists only real discoveries. Discovery does not fabricate a baseline: breaking
+change and code-impact analysis still requires two contract versions. The repository table labels
+that separate action **Impact analysis** to make the requirement explicit.
 
 ---
 
@@ -1452,19 +1593,22 @@ Distributed workers, queues, and production orchestration are intentionally outs
 
 DriftGuard AI is a secure-conscious MVP focused on static API migration intelligence and human-reviewed remediation. Its current boundaries are intentional:
 
-- **API coverage:** OpenAPI 3.x is supported. Local JSON Pointer `$ref` values are resolved, while remote references and some advanced schema-comparison cases are outside the current scope.
+- **Contract coverage:** OpenAPI 3.x and GraphQL SDL are supported. OpenAPI local JSON Pointer `$ref` values are resolved. GraphQL support is static SDL and statically discoverable consumer-document analysis: DriftGuard does not introspect arbitrary endpoints, execute resolvers or operations, or infer all federation, runtime-variable, dynamically constructed query, and business-semantic behavior.
 
-- **Repository intelligence:** Python, JavaScript, and TypeScript receive deeper static analysis. Other supported source files use lexical matching. Dynamically constructed URLs, reflection, runtime dependency injection, and external package graphs may not be fully resolved.
+- **Repository intelligence:** Python, JavaScript, and TypeScript receive deeper static analysis, including bounded tagged/triple-quoted GraphQL documents and `.graphql`/`.gql` files. Other supported source files use lexical matching. Dynamically constructed URLs or queries, reflection, runtime dependency injection, and external package graphs may not be fully resolved.
 
-- **Repository acquisition:** DriftGuard supports uploaded ZIP archives and public GitHub repositories. Full private-repository SaaS onboarding is not yet implemented.
+- **Repository acquisition:** DriftGuard supports uploaded ZIP archives, public GitHub URLs, and repositories authorized through a workspace-owned GitHub App installation. Production use of connected private repositories still requires the operator to configure and install the real GitHub App.
 
-- **Static validation only:** Repository source code, builds, package managers, and tests are never executed. Patch validation therefore provides migration confidence and review readiness, not a guarantee that the application compiles or behaves correctly at runtime.
+- **Validation execution:** Static validation is always available. An opt-in process-local runner
+  can execute allowlisted pytest or package-manager scripts in development/test only, inside a
+  disposable copy. Production requires an external sandbox; with execution disabled, the API
+  reports `DEGRADED` and clearly states that repository tests were not executed.
 
-- **Monitoring:** The built-in scheduler is process-local and intended for a single-worker MVP. Distributed scheduling and webhook-driven monitoring are future capabilities.
+- **Monitoring:** Remote URL monitoring remains OpenAPI-only in this release. GitHub-hosted GraphQL contracts participate in discovery and immutable PR checks, while arbitrary GraphQL introspection and remote SDL monitoring are deliberately deferred. The built-in scheduler is process-local and intended for a single-worker MVP.
 
 - **ML risk scoring:** The current risk model is trained and evaluated on deterministic synthetic data. Scores should be used to prioritize engineering review, not as autonomous approval or deployment decisions.
 
-- **Deployment model:** SQLite is appropriate for local and single-instance demonstrations. Firestore is available as an alternative persistence adapter, but authentication, multi-tenancy, distributed workers, and production-scale orchestration are outside the MVP.
+- **Deployment model:** SQLite is appropriate for local and single-instance demonstrations. Firestore is available as an alternative tenant-aware persistence adapter. Authentication, workspaces, RBAC, tenant isolation, and trusted workspace-aware background processing are implemented; distributed queues, invitation delivery, enterprise identity, billing, and production-scale orchestration remain outside this phase.
 
 - **GitHub remediation:** DriftGuard can prepare an explicitly confirmed review branch and Pull Request from a validated patch. It never automatically merges, deploys, releases, or modifies the repository default branch.
 
@@ -1474,8 +1618,7 @@ DriftGuard AI is a secure-conscious MVP focused on static API migration intellig
 
 Potential next steps include:
 
-- GitHub App onboarding for private repositories
-- Authentication, organizations, and multi-tenancy
+- Self-service workspace invitations and enterprise identity providers
 - Webhook-driven API and repository monitoring
 - Sandboxed CI and test execution
 - Additional programming-language analyzers
@@ -1483,6 +1626,7 @@ Potential next steps include:
 - Pull Request status synchronization and review feedback
 - Real-world calibration of the migration-risk model
 - Organization-level migration and security policies
+- Protobuf/gRPC contract adapters after the normalized adapter boundary is proven in production usage
 
 ---
 
@@ -1490,7 +1634,7 @@ Potential next steps include:
 
 **DriftGuard AI — API Change Impact & Migration Intelligence Platform**
 
-Built as a developer platform that monitors OpenAPI contracts for breaking changes, performs static repository dependency analysis across Python, JavaScript, and TypeScript, predicts migration risk, generates migration guidance and bounded code patches, performs static patch validation and test discovery, and prepares human-reviewed GitHub Pull Requests.
+Built as a developer platform that compares OpenAPI 3.x and GraphQL SDL contracts, performs static repository dependency analysis across Python, JavaScript, and TypeScript, predicts migration risk, generates migration guidance and bounded code patches, performs static patch validation and test discovery, and prepares human-reviewed GitHub Pull Requests.
 
 Core technologies:
 
@@ -1507,6 +1651,7 @@ SQLite
 Firestore
 Gemini integration
 OpenAPI
+graphql-core
 ```
 
 DriftGuard is currently a **credible, security-conscious, demonstrable MVP** rather than a claim of production-ready autonomous software maintenance.

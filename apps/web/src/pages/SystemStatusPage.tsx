@@ -28,11 +28,11 @@ export function SystemStatusPage({
 
       <div className="status-grid">
         <MetricCard label="Analysis Engine" value={backendError ? "Unavailable" : engineReady ? "Ready" : "Checking"} detail="OpenAPI comparison and repository impact" tone={backendError ? "danger" : "success"} />
-        <MetricCard label="Risk Classifier" value={providerValue(readiness?.checks.risk_classifier, backendError)} detail="Versioned model with deterministic fallback" />
-        <MetricCard label="Migration Provider" value={providerStatus?.active_provider ?? (backendError ? "Unavailable" : "Checking")} detail={providerStatus?.provider_model ?? "Provider status pending"} />
-        <MetricCard label="Patch Provider" value={providerValue(readiness?.checks.patch_provider, backendError)} detail="Bounded review-only structured edits" />
-        <MetricCard label="Test Plan Provider" value={providerValue(readiness?.checks.test_plan_provider, backendError)} detail="Static discovery; tests are not executed" />
-        <MetricCard label="GitHub Write Provider" value={providerValue(readiness?.checks.github_write_provider, backendError)} detail="Explicit confirmation; no automatic merge" />
+        <CapabilityCard label="Risk Classifier" status={readiness?.checks.risk_classifier} backendError={backendError} detail="Versioned model with deterministic fallback" />
+        <CapabilityCard label="Migration Provider" status={readiness?.checks.migration_provider} backendError={backendError} detail={providerStatus ? `${providerStatus.active_provider} · ${providerStatus.provider_model}` : "Provider status pending"} />
+        <CapabilityCard label="Patch Provider" status={readiness?.checks.patch_provider} backendError={backendError} detail="Evidence-gated bounded structured edits" />
+        <CapabilityCard label="Test Provider" status={readiness?.checks.test_plan_provider} backendError={backendError} detail="Static discovery plus allowlisted execution when configured" />
+        <CapabilityCard label="GitHub Write Provider" status={readiness?.checks.github_write_provider} backendError={backendError} detail="GitHub App; explicit confirmation; no automatic merge" />
       </div>
 
       {readiness && readiness.issues.length > 0 && (
@@ -49,4 +49,31 @@ function providerValue(value: string | undefined, backendError: boolean) {
   if (backendError) return "Unavailable";
   if (!value) return "Checking";
   return value.replaceAll("_", " ");
+}
+
+function CapabilityCard({
+  label,
+  status,
+  backendError,
+  detail,
+}: {
+  label: string;
+  status: string | undefined;
+  backendError: boolean;
+  detail: string;
+}) {
+  const normalized = backendError ? "unavailable" : status;
+  const tone = normalized === "ready"
+    ? "success"
+    : normalized === "unavailable"
+      ? "danger"
+      : "warning";
+  return (
+    <MetricCard
+      label={label}
+      value={providerValue(status, backendError)}
+      detail={detail}
+      tone={tone}
+    />
+  );
 }

@@ -115,6 +115,20 @@ class SQLiteMonitorRepository(ApiMonitorRepository):
             <= now
         ]
 
+    def list_due_all(self, now: datetime) -> list[tuple[str, ApiMonitor]]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT * FROM api_monitors WHERE enabled = 1 ORDER BY created_at"
+            ).fetchall()
+        result = []
+        for row in rows:
+            monitor = _monitor(row)
+            if (monitor.last_checked_at or monitor.created_at) + timedelta(
+                minutes=monitor.check_interval_minutes
+            ) <= now:
+                result.append((str(row["workspace_id"]), monitor))
+        return result
+
     def delete(self, monitor_id: str) -> bool:
         with self._transaction() as connection:
             cursor = connection.execute(

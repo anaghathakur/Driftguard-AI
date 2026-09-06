@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from uuid import NAMESPACE_URL, uuid5
 
+from apps.api.app.core.exceptions import DriftGuardError
 from apps.api.app.migration.context import (
     MigrationContext,
     build_prompt,
@@ -39,10 +40,12 @@ class MigrationRecommendationService:
         *,
         prompt_version: str = "migration-prompt-v1",
         schema_version: str = "migration-schema-v1",
+        allow_deterministic_fallback: bool = True,
     ) -> None:
         self.provider = provider
         self.prompt_version = prompt_version
         self.schema_version = schema_version
+        self.allow_deterministic_fallback = allow_deterministic_fallback
 
     def fingerprint_profile(self) -> str:
         """Return configuration that changes recommendation output."""
@@ -70,7 +73,7 @@ class MigrationRecommendationService:
             available=self.provider.available,
             prompt_version=self.prompt_version,
             schema_version=self.schema_version,
-            fallback_enabled=True,
+            fallback_enabled=self.allow_deterministic_fallback,
             warning=self.provider.warning,
         )
 
@@ -122,13 +125,19 @@ class MigrationRecommendationService:
                 prompt,
             )
 
-            recommendation_source = (
-                RecommendationSource.MOCK
-                if provider == MigrationProvider.MOCK
-                else RecommendationSource.GEMINI
-            )
+            recommendation_source = {
+                MigrationProvider.MOCK: RecommendationSource.MOCK,
+                MigrationProvider.GEMINI: RecommendationSource.GEMINI,
+                MigrationProvider.DETERMINISTIC: RecommendationSource.DETERMINISTIC,
+            }[provider]
 
         except Exception as exc:
+            if not self.allow_deterministic_fallback:
+                raise DriftGuardError(
+                    code="migration_provider_unavailable",
+                    message="The configured migration provider is currently unavailable.",
+                    status_code=503,
+                ) from exc
             content = deterministic_recommendation(context)
 
             recommendation_source = RecommendationSource.DETERMINISTIC_FALLBACK

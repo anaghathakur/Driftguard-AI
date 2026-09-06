@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 from collections.abc import Callable
 from dataclasses import asdict
 from datetime import UTC, datetime
@@ -11,6 +12,9 @@ from pathlib import PurePosixPath
 from time import perf_counter
 from typing import TypeVar
 
+from apps.api.app.auth.authorization import Permission, authorize
+from apps.api.app.contracts.registry import default_contract_registry
+from apps.api.app.core import config
 from apps.api.app.core.exceptions import DriftGuardError
 from apps.api.app.core.workspace_context import (
     LOCAL_WORKSPACE_ID,
@@ -23,14 +27,13 @@ from apps.api.app.domain.analysis import (
     AnalysisSubmission,
     RepositorySourceType,
 )
+from apps.api.app.graphql.impact import GraphQLImpactMatcher
 from apps.api.app.migration.provider import (
-    MockMigrationRecommendationProvider,
+    DeterministicMigrationRecommendationProvider,
 )
 from apps.api.app.migration.service import (
     MigrationRecommendationService,
 )
-from apps.api.app.openapi.normalizer import normalize_openapi
-from apps.api.app.openapi.parser import parse_openapi_document
 from apps.api.app.ports.analysis_repository import AnalysisRepository
 from apps.api.app.repository.matcher import ApiImpactMatcher
 from apps.api.app.repository.scanner import RepositoryArchiveScanner
@@ -49,6 +52,7 @@ from apps.api.app.schemas.comparison import (
     ComparisonResponse,
     ComparisonSummary,
     ContractMetadata,
+    ContractType,
 )
 from apps.api.app.schemas.impact import (
     ChangeImpact,
@@ -62,10 +66,10 @@ from apps.api.app.schemas.patch import PatchProposal
 from apps.api.app.schemas.pull_request import GitHubPullRequestRecord
 from apps.api.app.schemas.risk import RiskPrediction
 from apps.api.app.schemas.validation import PatchValidationRun
-from apps.api.app.services.comparison import SpecificationComparisonService
 
 T = TypeVar("T")
-ANALYSIS_PIPELINE_VERSION = "5.0.0"
+ANALYSIS_PIPELINE_VERSION = "6.0.2"
+logger = logging.getLogger("driftguard.analysis")
 
 
 class AnalysisPipelineService:
@@ -79,7 +83,7 @@ class AnalysisPipelineService:
         self.risk_classifier = risk_classifier
 
         self.migration_service = migration_service or MigrationRecommendationService(
-            MockMigrationRecommendationProvider()
+            DeterministicMigrationRecommendationProvider()
         )
 
     def compare(
@@ -89,7 +93,9 @@ class AnalysisPipelineService:
         old_content: bytes,
         new_filename: str,
         new_content: bytes,
+        contract_type: ContractType | str | None = None,
     ) -> ComparisonResponse:
+        authorize(Permission.RUN_ANALYSES)
         creation = self.repository.create_or_get(
             _submission(
                 kind=AnalysisKind.COMPARISON,
@@ -97,27 +103,26 @@ class AnalysisPipelineService:
                 old_content=old_content,
                 new_filename=new_filename,
                 new_content=new_content,
+                contract_type=contract_type,
             )
         )
         if creation.duplicate:
             return self._duplicate_comparison(creation.analysis)
 
         pipeline = _PipelineExecution(self.repository, creation.analysis.analysis_id)
-        old_contract, new_contract = pipeline.run(
+        prepared = pipeline.run(
             "validate_and_normalize_specifications",
-            lambda: (
-                normalize_openapi(parse_openapi_document(old_filename, old_content)),
-                normalize_openapi(parse_openapi_document(new_filename, new_content)),
+            lambda: default_contract_registry.prepare_comparison(
+                old_filename=old_filename,
+                old_content=old_content,
+                new_filename=new_filename,
+                new_content=new_content,
+                requested=contract_type,
             ),
         )
         comparison = pipeline.run(
             "compare_contracts",
-            lambda: SpecificationComparisonService().compare_contracts(
-                old_contract=old_contract,
-                old_content=old_content,
-                new_contract=new_contract,
-                new_content=new_content,
-            ),
+            lambda: prepared.response,
         ).model_copy(
             update={
                 "analysis_id": creation.analysis.analysis_id,
@@ -168,7 +173,9 @@ class AnalysisPipelineService:
         repository_url: str | None = None,
         repository_ref: str | None = None,
         repository_commit_sha: str | None = None,
+        contract_type: ContractType | str | None = None,
     ) -> ImpactAnalysisResponse:
+        authorize(Permission.RUN_ANALYSES)
         creation = self.repository.create_or_get(
             _submission(
                 kind=AnalysisKind.IMPACT,
@@ -182,27 +189,26 @@ class AnalysisPipelineService:
                 repository_url=repository_url,
                 repository_ref=repository_ref,
                 repository_commit_sha=repository_commit_sha,
+                contract_type=contract_type,
             )
         )
         if creation.duplicate:
             return self._duplicate_impact(creation.analysis)
 
         pipeline = _PipelineExecution(self.repository, creation.analysis.analysis_id)
-        old_contract, new_contract = pipeline.run(
+        prepared = pipeline.run(
             "validate_and_normalize_specifications",
-            lambda: (
-                normalize_openapi(parse_openapi_document(old_filename, old_content)),
-                normalize_openapi(parse_openapi_document(new_filename, new_content)),
+            lambda: default_contract_registry.prepare_comparison(
+                old_filename=old_filename,
+                old_content=old_content,
+                new_filename=new_filename,
+                new_content=new_content,
+                requested=contract_type,
             ),
         )
         comparison = pipeline.run(
             "compare_contracts",
-            lambda: SpecificationComparisonService().compare_contracts(
-                old_contract=old_contract,
-                old_content=old_content,
-                new_contract=new_contract,
-                new_content=new_content,
-            ),
+            lambda: prepared.response,
         ).model_copy(
             update={
                 "analysis_id": creation.analysis.analysis_id,
@@ -215,8 +221,12 @@ class AnalysisPipelineService:
         )
         impact_result = pipeline.run(
             "match_api_usage",
-            lambda: ApiImpactMatcher().analyze(
-                comparison.changes, scan, old_contract, new_contract
+            lambda: (
+                GraphQLImpactMatcher().analyze(comparison.changes, scan)
+                if prepared.contract_type is ContractType.GRAPHQL
+                else ApiImpactMatcher().analyze(
+                    comparison.changes, scan, prepared.old_contract, prepared.new_contract
+                )
             ),
         )
         impacts = impact_result.impacts
@@ -269,6 +279,7 @@ class AnalysisPipelineService:
         )
 
     def list_analyses(self, *, limit: int, offset: int) -> list[AnalysisListItem]:
+        authorize(Permission.READ_ANALYSES)
         return [
             self._list_item(record)
             for record in self.repository.list_analyses(limit=limit, offset=offset)
@@ -345,6 +356,7 @@ class AnalysisPipelineService:
         )
 
     def delete(self, analysis_id: str) -> None:
+        authorize(Permission.DELETE_ANALYSES)
         if not self.repository.delete(analysis_id):
             _not_found()
 
@@ -381,6 +393,8 @@ class AnalysisPipelineService:
                 change_id=change.change_id,
                 path=change.path,
                 method=change.method,
+                operation_identifier=change.operation_identifier,
+                operation_kind=change.operation_kind,
                 matches=matches_by_change.get(change.change_id, []),
             )
             for change in comparison.changes
@@ -422,6 +436,7 @@ class AnalysisPipelineService:
         )
 
     def _require_analysis(self, analysis_id: str) -> AnalysisRecord:
+        authorize(Permission.READ_ANALYSES)
         record = self.repository.get_analysis(analysis_id)
         if record is None:
             _not_found()
@@ -549,6 +564,19 @@ class _PipelineExecution:
         started_clock: float,
         exc: Exception,
     ) -> None:
+        if not isinstance(exc, DriftGuardError):
+            logger.error(
+                "Unexpected analysis pipeline exception analysis_id=%s stage=%s "
+                "exception_type=%s",
+                self.analysis_id,
+                stage_name,
+                type(exc).__name__,
+                exc_info=(
+                    Exception,
+                    Exception("Unexpected exception details redacted."),
+                    exc.__traceback__,
+                ),
+            )
         error = _safe_error(exc)
         self.repository.fail_analysis(
             analysis_id=self.analysis_id,
@@ -576,11 +604,17 @@ def _submission(
     repository_url: str | None = None,
     repository_ref: str | None = None,
     repository_commit_sha: str | None = None,
+    contract_type: ContractType | str | None = None,
 ) -> AnalysisSubmission:
     old_hash = hashlib.sha256(old_content).hexdigest()
     new_hash = hashlib.sha256(new_content).hexdigest()
     repository_hash = (
         hashlib.sha256(repository_content).hexdigest() if repository_content is not None else None
+    )
+    old_safe_filename = _safe_filename(old_filename)
+    new_safe_filename = _safe_filename(new_filename)
+    repository_safe_filename = (
+        _safe_filename(repository_filename) if repository_filename is not None else None
     )
     workspace_id = current_workspace_id()
     workspace_fingerprint = workspace_id if workspace_id != LOCAL_WORKSPACE_ID else None
@@ -590,6 +624,8 @@ def _submission(
             "kind": kind.value,
             "old": old_hash,
             "new": new_hash,
+            "contract_type": _contract_type_value(contract_type),
+            "analysis_limits": _analysis_limit_profile(),
             "repository": repository_hash,
             "repository_source_type": (
                 repository_source_type.value if repository_source_type else None
@@ -605,11 +641,9 @@ def _submission(
     return AnalysisSubmission(
         kind=kind,
         request_fingerprint=hashlib.sha256(fingerprint_source.encode()).hexdigest(),
-        old_filename=_safe_filename(old_filename),
-        new_filename=_safe_filename(new_filename),
-        repository_filename=(
-            _safe_filename(repository_filename) if repository_filename is not None else None
-        ),
+        old_filename=old_safe_filename,
+        new_filename=new_safe_filename,
+        repository_filename=repository_safe_filename,
         old_file_sha256=old_hash,
         new_file_sha256=new_hash,
         repository_file_sha256=repository_hash,
@@ -619,6 +653,35 @@ def _submission(
         repository_ref=repository_ref,
         repository_commit_sha=repository_commit_sha,
     )
+
+
+def _contract_type_value(contract_type: ContractType | str | None) -> str:
+    if isinstance(contract_type, ContractType):
+        return contract_type.value
+    return contract_type or "auto"
+
+
+def _analysis_limit_profile() -> dict[str, int]:
+    runtime = config.settings
+    return {
+        "max_spec_file_bytes": runtime.max_spec_file_bytes,
+        "max_graphql_document_bytes": runtime.max_graphql_document_bytes,
+        "max_graphql_ast_nodes": runtime.max_graphql_ast_nodes,
+        "max_graphql_changes": runtime.max_graphql_changes,
+        "max_graphql_query_documents": runtime.max_graphql_query_documents,
+        "max_repository_archive_bytes": runtime.max_repository_archive_bytes,
+        "max_repository_files": runtime.max_repository_files,
+        "max_repository_file_bytes": runtime.max_repository_file_bytes,
+        "max_repository_uncompressed_bytes": runtime.max_repository_uncompressed_bytes,
+        "max_repository_compression_ratio": runtime.max_repository_compression_ratio,
+        "max_repository_tree_entries": runtime.max_repository_tree_entries,
+        "max_repository_source_files": runtime.max_repository_source_files,
+        "max_repository_source_file_bytes": runtime.max_repository_source_file_bytes,
+        "max_repository_source_bytes": runtime.max_repository_source_bytes,
+        "max_code_symbols": runtime.max_code_symbols,
+        "max_code_graph_edges": runtime.max_code_graph_edges,
+        "max_impact_depth": runtime.max_impact_depth,
+    }
 
 
 def _safe_filename(filename: str) -> str:

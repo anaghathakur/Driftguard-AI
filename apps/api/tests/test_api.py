@@ -88,7 +88,10 @@ def test_health_endpoints(client):
     assert ready.status_code == 200
     assert ready.json()["status"] == "ready"
     assert ready.json()["checks"]["storage"] == "sqlite"
-    assert ready.json()["checks"]["github_write_provider"] == "mock"
+    assert ready.json()["checks"]["migration_provider"] == "ready"
+    assert ready.json()["checks"]["patch_provider"] == "ready"
+    assert ready.json()["checks"]["test_plan_provider"] == "degraded"
+    assert ready.json()["checks"]["github_write_provider"] == "mock_development_only"
     assert ready.json()["issues"] == []
     assert client.get("/api/v1/ready").json() == ready.json()
 

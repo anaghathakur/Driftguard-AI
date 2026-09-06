@@ -1,0 +1,11 @@
+type Query {
+  payment(id: ID!): Payment
+}
+
+type Mutation {
+  createPayment(amount: Int!, email: String!): Payment!
+}
+
+type Payment {
+  id: ID!
+}

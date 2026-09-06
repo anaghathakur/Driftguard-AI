@@ -31,10 +31,14 @@ async def readiness(response: Response) -> dict[str, object]:
 
     if settings.storage_backend not in {"sqlite", "firestore"}:
         issues.append("The selected storage backend is unsupported.")
-    if settings.ai_provider not in {"mock", "gemini"}:
-        issues.append("The selected migration and patch provider is unsupported.")
-    if settings.test_plan_provider not in {"mock", "gemini"}:
+    if settings.migration_provider not in {"deterministic", "mock", "gemini"}:
+        issues.append("The selected migration provider is unsupported.")
+    if settings.patch_provider not in {"deterministic", "mock", "gemini"}:
+        issues.append("The selected patch provider is unsupported.")
+    if settings.test_plan_provider not in {"deterministic", "mock", "gemini"}:
         issues.append("The selected test-plan provider is unsupported.")
+    if settings.validation_execution_provider not in {"disabled", "local"}:
+        issues.append("The selected validation execution provider is unsupported.")
     if settings.github_write_provider not in {"mock", "github_app"}:
         issues.append("The selected GitHub write provider is unsupported.")
     if settings.github_check_provider not in {"mock", "github_app"}:
@@ -59,8 +63,10 @@ async def readiness(response: Response) -> dict[str, object]:
         if not settings.github_oauth_callback_url.startswith(("http://", "https://")):
             issues.append("The configured GitHub OAuth callback URL is invalid.")
 
-    if settings.ai_provider == "gemini" and not settings.gemini_api_key:
-        issues.append("Gemini is selected but its API key is not configured.")
+    if (
+        settings.migration_provider == "gemini" or settings.patch_provider == "gemini"
+    ) and not settings.gemini_api_key:
+        issues.append("Gemini is selected for remediation but its API key is not configured.")
     if settings.test_plan_provider == "gemini" and not settings.gemini_api_key:
         issues.append("Gemini test planning is selected but its API key is not configured.")
     if settings.github_write_provider == "github_app":
@@ -90,11 +96,11 @@ async def readiness(response: Response) -> dict[str, object]:
             ),
             "github_app": settings.github_write_provider,
             "analysis_engine": "ready",
-            "risk_classifier": "model_with_deterministic_fallback",
-            "migration_provider": settings.ai_provider,
-            "patch_provider": settings.ai_provider,
-            "test_plan_provider": settings.test_plan_provider,
-            "github_write_provider": settings.github_write_provider,
+            "risk_classifier": _risk_status(),
+            "migration_provider": _remediation_status(settings.migration_provider),
+            "patch_provider": _remediation_status(settings.patch_provider),
+            "test_plan_provider": _test_provider_status(),
+            "github_write_provider": _github_write_status(),
             "monitor_scheduler": (
                 "process_local_enabled" if settings.monitor_scheduler_enabled else "disabled"
             ),
@@ -110,3 +116,62 @@ async def readiness(response: Response) -> dict[str, object]:
             "automation_persistence": "sqlite_sidecar",
         "issues": issues,
     }
+
+
+def _risk_status() -> str:
+    return (
+        "ready"
+        if Path(settings.risk_model_path).is_file()
+        and Path(settings.risk_model_metadata_path).is_file()
+        else "degraded"
+    )
+
+
+def _remediation_status(provider: str) -> str:
+    if provider == "deterministic":
+        return "ready"
+    if provider == "gemini":
+        return "ready" if settings.gemini_api_key else "not_configured"
+    if provider == "mock":
+        return (
+            "mock_development_only"
+            if settings.deployment_environment != "production"
+            else "unavailable"
+        )
+    return "unavailable"
+
+
+def _test_provider_status() -> str:
+    if settings.validation_execution_provider == "local":
+        return (
+            "ready"
+            if settings.deployment_environment in {"development", "test"}
+            else "unavailable"
+        )
+    return "degraded"
+
+
+def _github_write_status() -> str:
+    if settings.github_write_provider == "github_app":
+        private_key = Path(settings.github_app_private_key_path)
+        signing_ready = False
+        if settings.github_app_id and private_key.is_file():
+            try:
+                from google.auth.crypt import RSASigner
+
+                RSASigner.from_string(private_key.read_bytes())
+                signing_ready = True
+            except Exception:
+                signing_ready = False
+        return (
+            "ready"
+            if signing_ready
+            else "not_configured"
+        )
+    if settings.github_write_provider == "mock":
+        return (
+            "mock_development_only"
+            if settings.deployment_environment != "production"
+            else "unavailable"
+        )
+    return "unavailable"

@@ -6,6 +6,7 @@ import asyncio
 import logging
 from datetime import UTC, datetime
 
+from apps.api.app.core.workspace_context import WorkspacePrincipal, workspace_scope
 from apps.api.app.monitoring.service import MonitorCheckService
 from apps.api.app.ports.monitor_repository import ApiMonitorRepository
 
@@ -44,9 +45,10 @@ class MonitorScheduler:
         logger.info("Process-local monitor scheduler stopped")
 
     async def run_once(self, *, now: datetime | None = None) -> None:
-        for monitor in self.repository.list_due(now or datetime.now(UTC)):
+        for workspace_id, monitor in self.repository.list_due_all(now or datetime.now(UTC)):
             try:
-                await self.check_service.check(monitor.monitor_id)
+                with workspace_scope(WorkspacePrincipal(workspace_id=workspace_id, system=True)):
+                    await self.check_service.check(monitor.monitor_id)
             except Exception as exc:
                 logger.warning(
                     "Monitor check failed monitor_id=%s error_type=%s error_code=%s",

@@ -19,11 +19,15 @@ import {
 type MonitorPanelProps = {
   onViewAnalysis: (analysisId: string) => void;
   onMonitorsChanged?: (monitors: ApiMonitor[]) => void;
+  canManage: boolean;
+  canCheck: boolean;
 };
 
 export function MonitorPanel({
   onViewAnalysis,
   onMonitorsChanged,
+  canManage,
+  canCheck,
 }: MonitorPanelProps) {
   const [monitors, setMonitors] = useState<ApiMonitor[]>([]);
   const [checks, setChecks] = useState<Record<string, MonitorCheck[]>>({});
@@ -126,16 +130,17 @@ export function MonitorPanel({
         <p className="mt-1 text-sm text-slate-400">
           Remember an OpenAPI baseline and analyze configured GitHub code only when it changes.
         </p>
+        {!canManage && <p className="mt-2 text-xs text-amber-200">Your workspace role has read-only monitor configuration access.</p>}
       </div>
 
       <form onSubmit={(event) => void handleCreate(event)} className="mt-6 grid gap-4 rounded-xl border border-white/10 bg-black/20 p-4 md:grid-cols-2">
-        <MonitorInput label="Monitor name" value={form.name} placeholder="Stripe Payments API" disabled={isCreating} onChange={(value) => setForm({ ...form, name: value })} />
-        <MonitorInput label="OpenAPI URL" value={form.specificationUrl} placeholder="https://example.com/openapi.json" disabled={isCreating} onChange={(value) => setForm({ ...form, specificationUrl: value })} />
-        <MonitorInput label="GitHub repository" value={form.repositoryUrl} placeholder="https://github.com/company/payment-service" disabled={isCreating} onChange={(value) => setForm({ ...form, repositoryUrl: value })} />
-        <MonitorInput label="Branch, tag, or ref (optional)" value={form.repositoryRef} placeholder="main" disabled={isCreating} onChange={(value) => setForm({ ...form, repositoryRef: value })} />
-        <MonitorInput label="Check interval (minutes)" value={form.interval} type="number" placeholder="60" disabled={isCreating} onChange={(value) => setForm({ ...form, interval: value })} />
+        <MonitorInput label="Monitor name" value={form.name} placeholder="Stripe Payments API" disabled={isCreating || !canManage} onChange={(value) => setForm({ ...form, name: value })} />
+        <MonitorInput label="OpenAPI URL" value={form.specificationUrl} placeholder="https://example.com/openapi.json" disabled={isCreating || !canManage} onChange={(value) => setForm({ ...form, specificationUrl: value })} />
+        <MonitorInput label="GitHub repository" value={form.repositoryUrl} placeholder="https://github.com/company/payment-service" disabled={isCreating || !canManage} onChange={(value) => setForm({ ...form, repositoryUrl: value })} />
+        <MonitorInput label="Branch, tag, or ref (optional)" value={form.repositoryRef} placeholder="main" disabled={isCreating || !canManage} onChange={(value) => setForm({ ...form, repositoryRef: value })} />
+        <MonitorInput label="Check interval (minutes)" value={form.interval} type="number" placeholder="60" disabled={isCreating || !canManage} onChange={(value) => setForm({ ...form, interval: value })} />
         <div className="flex items-end">
-          <button type="submit" disabled={isCreating || !form.name || !form.specificationUrl || !form.repositoryUrl} className="w-full rounded-xl bg-gradient-to-r from-violet-400 to-cyan-400 px-5 py-3 text-sm font-semibold text-slate-950 disabled:cursor-not-allowed disabled:opacity-50">
+          <button type="submit" disabled={!canManage || isCreating || !form.name || !form.specificationUrl || !form.repositoryUrl} title={!canManage ? "Only owners and admins can create monitors." : undefined} className="w-full rounded-xl bg-gradient-to-r from-violet-400 to-cyan-400 px-5 py-3 text-sm font-semibold text-slate-950 disabled:cursor-not-allowed disabled:opacity-50">
             {isCreating ? "Establishing baseline..." : "Create monitor"}
           </button>
         </div>
@@ -166,11 +171,11 @@ export function MonitorPanel({
               </div>
 
               <div className="flex flex-wrap gap-2">
-                <Action disabled={busyMonitor === monitor.monitor_id} onClick={() => void runAction(monitor.monitor_id, async () => { await checkMonitor(monitor.monitor_id); })}>Check now</Action>
-                <Action disabled={busyMonitor === monitor.monitor_id} onClick={() => void runAction(monitor.monitor_id, async () => { await updateMonitor(monitor.monitor_id, { enabled: !monitor.enabled }); })}>{monitor.enabled ? "Disable" : "Enable"}</Action>
+                <Action disabled={!canCheck || busyMonitor === monitor.monitor_id} onClick={() => void runAction(monitor.monitor_id, async () => { await checkMonitor(monitor.monitor_id); })}>Check now</Action>
+                <Action disabled={!canManage || busyMonitor === monitor.monitor_id} onClick={() => void runAction(monitor.monitor_id, async () => { await updateMonitor(monitor.monitor_id, { enabled: !monitor.enabled }); })}>{monitor.enabled ? "Disable" : "Enable"}</Action>
                 <Action disabled={busyMonitor === monitor.monitor_id} onClick={() => void toggleHistory(monitor.monitor_id)}>History</Action>
                 {monitor.last_successful_analysis_id && <Action disabled={false} onClick={() => onViewAnalysis(monitor.last_successful_analysis_id as string)}>View analysis</Action>}
-                <Action danger disabled={busyMonitor === monitor.monitor_id} onClick={() => { if (window.confirm(`Delete monitor “${monitor.name}”?`)) void runAction(monitor.monitor_id, async () => { await deleteMonitor(monitor.monitor_id); }); }}>Delete</Action>
+                <Action danger disabled={!canManage || busyMonitor === monitor.monitor_id} onClick={() => { if (window.confirm(`Delete monitor “${monitor.name}”?`)) void runAction(monitor.monitor_id, async () => { await deleteMonitor(monitor.monitor_id); }); }}>Delete</Action>
               </div>
             </div>
 

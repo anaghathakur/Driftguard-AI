@@ -7,6 +7,8 @@ from contextlib import contextmanager
 from contextvars import ContextVar, Token
 from dataclasses import dataclass
 
+from apps.api.app.domain.workspace import WorkspaceRole
+
 LOCAL_WORKSPACE_ID = "00000000-0000-0000-0000-000000000001"
 LOCAL_WORKSPACE_NAME = "Local Workspace"
 LOCAL_WORKSPACE_SLUG = "local"
@@ -18,6 +20,9 @@ class WorkspacePrincipal:
     user_id: str | None = None
     github_login: str | None = None
     local: bool = False
+
+    role: WorkspaceRole | None = None
+    system: bool = False
 
 
 _principal: ContextVar[WorkspacePrincipal] = ContextVar(

@@ -80,6 +80,25 @@ class FirestoreMonitorRepository(ApiMonitorRepository):
             <= now
         ]
 
+    def list_due_all(self, now: datetime) -> list[tuple[str, ApiMonitor]]:
+        result = []
+        for snapshot in self._monitors.stream():
+            data = snapshot.to_dict() or {}
+            monitor = _monitor(data, _baseline_content(snapshot.reference))
+            if not monitor.enabled:
+                continue
+            if (monitor.last_checked_at or monitor.created_at) + timedelta(
+                minutes=monitor.check_interval_minutes
+            ) > now:
+                continue
+            result.append(
+                (
+                    str(data.get("workspace_id", LOCAL_WORKSPACE_ID)),
+                    monitor,
+                )
+            )
+        return result
+
     def delete(self, monitor_id: str) -> bool:
         reference = self._monitors.document(monitor_id)
         snapshot = reference.get()

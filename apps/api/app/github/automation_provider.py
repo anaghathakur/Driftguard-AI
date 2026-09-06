@@ -211,6 +211,12 @@ class RealGitHubAutomationProvider(GitHubAutomationProvider):
                 code="repository_file_limit_exceeded",
                 message="Repository tree exceeds the configured entry limit.",
                 status_code=413,
+                details={
+                    "limit": "github_tree_entries",
+                    "actual_entries": len(tree),
+                    "configured_max_entries": settings.max_repository_tree_entries,
+                    "configuration": "DRIFTGUARD_MAX_REPOSITORY_TREE_ENTRIES",
+                },
             )
         return [str(item["path"]) for item in tree if item.get("type") == "blob"]
 

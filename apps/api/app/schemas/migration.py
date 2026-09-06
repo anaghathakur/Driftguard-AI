@@ -27,6 +27,7 @@ class RecommendationSource(StrEnum):
 
     MOCK = "mock"
     GEMINI = "gemini"
+    DETERMINISTIC = "deterministic"
     DETERMINISTIC_FALLBACK = "deterministic_fallback"
 
 

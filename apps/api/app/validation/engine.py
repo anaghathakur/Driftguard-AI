@@ -378,7 +378,8 @@ def discover_related_tests(
 ) -> list[RelatedTest]:
     direct_symbols = {item.symbol for item in matches if item.impact_depth == 0 and item.symbol}
     transitive_symbols = {item.symbol for item in matches if item.impact_depth > 0 and item.symbol}
-    all_paths = {change.path for change in changes}
+    all_paths = {change.path for change in changes if change.path}
+    operations = {change.operation_identifier for change in changes if change.operation_identifier}
     fields = {change.subject for change in changes if change.subject}
     change_ids = [change.change_id for change in changes]
     candidates: list[RelatedTest] = []
@@ -397,11 +398,15 @@ def discover_related_tests(
         if endpoint_hits:
             reasons.append(f"References changed endpoint {endpoint_hits[0]}.")
             lines.update(_reference_lines(source.content, endpoint_hits[0]))
+        operation_hits = sorted(item for item in operations if item in source.content)
+        if operation_hits:
+            reasons.append(f"References changed contract operation {operation_hits[0]}.")
+            lines.update(_reference_lines(source.content, operation_hits[0].split(".")[-1]))
         field_hits = sorted(field for field in fields if _word_in(field, source.content))
         if field_hits:
             reasons.append(f"References changed request field {field_hits[0]}.")
             lines.update(_reference_lines(source.content, field_hits[0]))
-        direct = bool(related_symbols or endpoint_hits or field_hits)
+        direct = bool(related_symbols or endpoint_hits or operation_hits or field_hits)
         for symbol in sorted(transitive_symbols):
             if _references_symbol(source.content, symbol):
                 reasons.append(f"References impacted caller {symbol}.")

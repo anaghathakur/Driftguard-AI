@@ -36,20 +36,24 @@ CREATE TABLE IF NOT EXISTS users (
     github_display_name TEXT,
     avatar_url TEXT,
     created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
+    updated_at TEXT NOT NULL,
+    auth_provider TEXT NOT NULL DEFAULT 'github',
+    external_subject TEXT,
+    email TEXT
 );
 CREATE TABLE IF NOT EXISTS workspaces (
     workspace_id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
     slug TEXT NOT NULL UNIQUE,
     created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
+    updated_at TEXT NOT NULL,
+    created_by_user_id TEXT
 );
 CREATE TABLE IF NOT EXISTS workspace_memberships (
     membership_id TEXT PRIMARY KEY,
     workspace_id TEXT NOT NULL,
     user_id TEXT NOT NULL,
-    role TEXT NOT NULL CHECK (role IN ('owner', 'member')),
+    role TEXT NOT NULL CHECK (role IN ('owner', 'admin', 'developer', 'viewer')),
     created_at TEXT NOT NULL,
     UNIQUE(workspace_id, user_id),
     FOREIGN KEY(workspace_id) REFERENCES workspaces(workspace_id) ON DELETE CASCADE,
@@ -114,6 +118,7 @@ CREATE TABLE IF NOT EXISTS audit_events (
     created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_memberships_user ON workspace_memberships(user_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_memberships_workspace ON workspace_memberships(workspace_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_installations_workspace ON github_installations(workspace_id);
 CREATE INDEX IF NOT EXISTS idx_repositories_workspace ON repository_connections(workspace_id, full_name);
 CREATE INDEX IF NOT EXISTS idx_audit_workspace ON audit_events(workspace_id, created_at DESC);
@@ -129,9 +134,11 @@ class SQLiteWorkspaceRepository(WorkspaceRepository):
         now = _iso(datetime.now(UTC))
         with self._transaction() as connection:
             connection.executescript(SCHEMA)
+            _migrate_phase20(connection)
             connection.execute(
                 """INSERT OR IGNORE INTO workspaces
-                   (workspace_id, name, slug, created_at, updated_at) VALUES (?, ?, ?, ?, ?)""",
+                   (workspace_id, name, slug, created_at, updated_at, created_by_user_id)
+                   VALUES (?, ?, ?, ?, ?, NULL)""",
                 (LOCAL_WORKSPACE_ID, LOCAL_WORKSPACE_NAME, LOCAL_WORKSPACE_SLUG, now, now),
             )
             _add_workspace_column(connection, "analyses")
@@ -140,11 +147,17 @@ class SQLiteWorkspaceRepository(WorkspaceRepository):
     def upsert_user(self, user: User) -> User:
         with self._transaction() as connection:
             connection.execute(
-                """INSERT INTO users VALUES (?, ?, ?, ?, ?, ?, ?)
+                """INSERT INTO users
+                   (user_id, github_user_id, github_login, github_display_name, avatar_url,
+                    created_at, updated_at, auth_provider, external_subject, email)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                    ON CONFLICT(github_user_id) DO UPDATE SET
                    github_login=excluded.github_login,
                    github_display_name=excluded.github_display_name,
                    avatar_url=excluded.avatar_url,
+                   auth_provider=excluded.auth_provider,
+                   external_subject=excluded.external_subject,
+                   email=excluded.email,
                    updated_at=excluded.updated_at""",
                 _user_values(user),
             )
@@ -159,16 +172,26 @@ class SQLiteWorkspaceRepository(WorkspaceRepository):
     def get_user_by_github_id(self, github_user_id: int) -> User | None:
         return self._one("SELECT * FROM users WHERE github_user_id = ?", (github_user_id,), _user)
 
+    def get_user_by_external_identity(self, provider: str, subject: str) -> User | None:
+        return self._one(
+            "SELECT * FROM users WHERE auth_provider = ? AND external_subject = ?",
+            (provider, subject),
+            _user,
+        )
+
     def create_workspace(self, workspace: Workspace, membership: WorkspaceMembership) -> None:
         with self._transaction() as connection:
             connection.execute(
-                "INSERT INTO workspaces VALUES (?, ?, ?, ?, ?)",
+                """INSERT INTO workspaces
+                   (workspace_id, name, slug, created_at, updated_at, created_by_user_id)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
                 (
                     workspace.workspace_id,
                     workspace.name,
                     workspace.slug,
                     _iso(workspace.created_at),
                     _iso(workspace.updated_at),
+                    workspace.created_by_user_id,
                 ),
             )
             connection.execute(
@@ -181,6 +204,40 @@ class SQLiteWorkspaceRepository(WorkspaceRepository):
                     _iso(membership.created_at),
                 ),
             )
+
+    def ensure_workspace(
+        self, workspace: Workspace, membership: WorkspaceMembership
+    ) -> bool:
+        with self._transaction() as connection:
+            created = (
+                connection.execute(
+                    """INSERT OR IGNORE INTO workspaces
+                       (workspace_id, name, slug, created_at, updated_at, created_by_user_id)
+                       VALUES (?, ?, ?, ?, ?, ?)""",
+                    (
+                        workspace.workspace_id,
+                        workspace.name,
+                        workspace.slug,
+                        _iso(workspace.created_at),
+                        _iso(workspace.updated_at),
+                        workspace.created_by_user_id,
+                    ),
+                ).rowcount
+                > 0
+            )
+            connection.execute(
+                """INSERT OR IGNORE INTO workspace_memberships
+                   (membership_id, workspace_id, user_id, role, created_at)
+                   VALUES (?, ?, ?, ?, ?)""",
+                (
+                    membership.membership_id,
+                    membership.workspace_id,
+                    membership.user_id,
+                    membership.role.value,
+                    _iso(membership.created_at),
+                ),
+            )
+        return created
 
     def get_workspace(self, workspace_id: str) -> Workspace | None:
         return self._one(
@@ -204,6 +261,56 @@ class SQLiteWorkspaceRepository(WorkspaceRepository):
             (user_id, workspace_id),
             _membership,
         )
+
+    def list_workspace_members(self, workspace_id: str) -> list[tuple[WorkspaceMembership, User]]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                """SELECT m.*, u.github_user_id, u.github_login, u.github_display_name,
+                   u.avatar_url, u.created_at AS user_created_at,
+                   u.updated_at AS user_updated_at, u.auth_provider,
+                   u.external_subject, u.email
+                   FROM workspace_memberships m JOIN users u ON u.user_id = m.user_id
+                   WHERE m.workspace_id = ? ORDER BY m.created_at""",
+                (workspace_id,),
+            ).fetchall()
+        return [(_membership(row), _user_join(row)) for row in rows]
+
+    def save_membership(self, membership: WorkspaceMembership) -> WorkspaceMembership:
+        with self._transaction() as connection:
+            connection.execute(
+                """INSERT INTO workspace_memberships
+                   (membership_id, workspace_id, user_id, role, created_at)
+                   VALUES (?, ?, ?, ?, ?)
+                   ON CONFLICT(workspace_id, user_id) DO UPDATE SET role=excluded.role""",
+                (
+                    membership.membership_id,
+                    membership.workspace_id,
+                    membership.user_id,
+                    membership.role.value,
+                    _iso(membership.created_at),
+                ),
+            )
+            row = connection.execute(
+                "SELECT * FROM workspace_memberships WHERE workspace_id = ? AND user_id = ?",
+                (membership.workspace_id, membership.user_id),
+            ).fetchone()
+        return _membership(row)
+
+    def delete_membership(self, user_id: str, workspace_id: str) -> bool:
+        with self._transaction() as connection:
+            result = connection.execute(
+                "DELETE FROM workspace_memberships WHERE user_id = ? AND workspace_id = ?",
+                (user_id, workspace_id),
+            )
+        return result.rowcount > 0
+
+    def count_members_by_role(self, workspace_id: str, role: WorkspaceRole) -> int:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT COUNT(*) AS total FROM workspace_memberships WHERE workspace_id = ? AND role = ?",
+                (workspace_id, role.value),
+            ).fetchone()
+        return int(row["total"])
 
     def save_session(self, session: AuthSession) -> None:
         with self._transaction() as connection:
@@ -394,6 +501,64 @@ class SQLiteWorkspaceRepository(WorkspaceRepository):
                 connection.commit()
 
 
+def _migrate_phase20(connection: sqlite3.Connection) -> None:
+    _add_column(connection, "users", "auth_provider", "TEXT NOT NULL DEFAULT 'github'")
+    _add_column(connection, "users", "external_subject", "TEXT")
+    _add_column(connection, "users", "email", "TEXT")
+    _add_column(connection, "workspaces", "created_by_user_id", "TEXT")
+    connection.execute(
+        """UPDATE users SET auth_provider = 'github'
+           WHERE auth_provider IS NULL OR auth_provider = ''"""
+    )
+    connection.execute(
+        """UPDATE users SET external_subject = CAST(github_user_id AS TEXT)
+           WHERE external_subject IS NULL OR external_subject = ''"""
+    )
+    table = connection.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='workspace_memberships'"
+    ).fetchone()
+    definition = str(table["sql"] if table else "")
+    if "'developer'" not in definition:
+        connection.execute(
+            "ALTER TABLE workspace_memberships RENAME TO workspace_memberships_legacy"
+        )
+        connection.execute(
+            """CREATE TABLE workspace_memberships (
+                membership_id TEXT PRIMARY KEY,
+                workspace_id TEXT NOT NULL,
+                user_id TEXT NOT NULL,
+                role TEXT NOT NULL CHECK (role IN ('owner', 'admin', 'developer', 'viewer')),
+                created_at TEXT NOT NULL,
+                UNIQUE(workspace_id, user_id),
+                FOREIGN KEY(workspace_id) REFERENCES workspaces(workspace_id) ON DELETE CASCADE,
+                FOREIGN KEY(user_id) REFERENCES users(user_id) ON DELETE CASCADE
+            )"""
+        )
+        connection.execute(
+            """INSERT INTO workspace_memberships
+               SELECT membership_id, workspace_id, user_id,
+                      CASE WHEN role = 'member' THEN 'developer' ELSE role END, created_at
+               FROM workspace_memberships_legacy"""
+        )
+        connection.execute("DROP TABLE workspace_memberships_legacy")
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS idx_memberships_user ON workspace_memberships(user_id, created_at)"
+    )
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS idx_memberships_workspace ON workspace_memberships(workspace_id, created_at)"
+    )
+    connection.execute(
+        """CREATE UNIQUE INDEX IF NOT EXISTS idx_users_external_identity
+           ON users(auth_provider, external_subject) WHERE external_subject IS NOT NULL"""
+    )
+
+
+def _add_column(connection: sqlite3.Connection, table: str, column: str, definition: str) -> None:
+    columns = {row[1] for row in connection.execute(f"PRAGMA table_info({table})")}
+    if column not in columns:
+        connection.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+
+
 def _add_workspace_column(connection: sqlite3.Connection, table: str) -> None:
     exists = connection.execute(
         "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)
@@ -430,10 +595,14 @@ def _user_values(value: User) -> tuple[object, ...]:
         value.avatar_url,
         _iso(value.created_at),
         _iso(value.updated_at),
+        value.external_auth_provider,
+        value.external_subject or str(value.github_user_id),
+        value.email,
     )
 
 
 def _user(row: sqlite3.Row) -> User:
+    columns = set(row.keys())
     return User(
         row["user_id"],
         row["github_user_id"],
@@ -442,26 +611,48 @@ def _user(row: sqlite3.Row) -> User:
         row["avatar_url"],
         _dt(row["created_at"]),
         _dt(row["updated_at"]),
+        row["auth_provider"] if "auth_provider" in columns else "github",
+        row["external_subject"] if "external_subject" in columns else str(row["github_user_id"]),
+        row["email"] if "email" in columns else None,
+    )
+
+
+def _user_join(row: sqlite3.Row) -> User:
+    return User(
+        row["user_id"],
+        row["github_user_id"],
+        row["github_login"],
+        row["github_display_name"],
+        row["avatar_url"],
+        _dt(row["user_created_at"]),
+        _dt(row["user_updated_at"]),
+        row["auth_provider"],
+        row["external_subject"],
+        row["email"],
     )
 
 
 def _workspace(row: sqlite3.Row) -> Workspace:
+    columns = set(row.keys())
     return Workspace(
         row["workspace_id"],
         row["name"],
         row["slug"],
         _dt(row["created_at"]),
         _dt(row["updated_at"]),
+        row["created_by_user_id"] if "created_by_user_id" in columns else None,
     )
 
 
 def _workspace_join(row: sqlite3.Row) -> Workspace:
+    columns = set(row.keys())
     return Workspace(
         row["workspace_id"],
         row["name"],
         row["slug"],
         _dt(row["workspace_created_at"]),
         _dt(row["workspace_updated_at"]),
+        row["created_by_user_id"] if "created_by_user_id" in columns else None,
     )
 
 

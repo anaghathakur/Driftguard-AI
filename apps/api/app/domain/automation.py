@@ -32,6 +32,7 @@ class BackgroundJobType(StrEnum):
 
 class ContractKind(StrEnum):
     OPENAPI = "openapi"
+    GRAPHQL = "graphql"
 
 
 class CheckRunStatus(StrEnum):

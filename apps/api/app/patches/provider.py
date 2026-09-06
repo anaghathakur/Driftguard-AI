@@ -10,9 +10,10 @@ from typing import Any
 
 from pydantic import ValidationError
 
+from apps.api.app.graphql.patch import graphql_argument_rename_edits
 from apps.api.app.migration.provider import MigrationProviderError
 from apps.api.app.patches.context import PatchGenerationContext, PatchPrompt
-from apps.api.app.schemas.comparison import ChangeType
+from apps.api.app.schemas.comparison import ChangeType, ContractType
 from apps.api.app.schemas.patch import (
     GeneratedPatchContent,
     PatchProvider,
@@ -50,12 +51,12 @@ class PatchGenerationProvider(ABC):
         return None
 
 
-class MockPatchGenerationProvider(PatchGenerationProvider):
-    """Useful zero-cost provider for conservative request-field migrations."""
+class DeterministicPatchGenerationProvider(PatchGenerationProvider):
+    """Evidence-gated source transformations for conservative field migrations."""
 
-    name = PatchProvider.MOCK
-    model_name = "deterministic-patch-mock-v1"
-    mode = PatchProviderMode.DETERMINISTIC_MOCK
+    name = PatchProvider.DETERMINISTIC
+    model_name = "deterministic-evidence-patch-v1"
+    mode = PatchProviderMode.EVIDENCE_BASED
 
     def generate(
         self,
@@ -68,7 +69,11 @@ class MockPatchGenerationProvider(PatchGenerationProvider):
             (
                 change
                 for change in context.changes
-                if change.change_type == ChangeType.REQUEST_FIELD_REMOVED
+                if change.change_type
+                in {
+                    ChangeType.REQUEST_FIELD_REMOVED,
+                    ChangeType.ARGUMENT_REMOVED,
+                }
                 and change.subject
                 and change.change_id in migration_change_ids
             ),
@@ -78,7 +83,11 @@ class MockPatchGenerationProvider(PatchGenerationProvider):
             (
                 change
                 for change in context.changes
-                if change.change_type == ChangeType.REQUIRED_REQUEST_FIELD_ADDED
+                if change.change_type
+                in {
+                    ChangeType.REQUIRED_REQUEST_FIELD_ADDED,
+                    ChangeType.REQUIRED_ARGUMENT_ADDED,
+                }
                 and change.subject
                 and change.change_id in migration_change_ids
             ),
@@ -93,16 +102,26 @@ class MockPatchGenerationProvider(PatchGenerationProvider):
             if language is None:
                 continue
             edits: list[StructuredPatchEdit] = []
-            pair = _matching_pair(removed, required)
+            pair = _matching_pair(removed, required, source.content)
             if pair is not None:
                 old_change, new_change = pair
-                edits = _rename_field_edits(
-                    source.content,
-                    language,
-                    old_change.subject or "",
-                    new_change.subject or "",
-                    [old_change.change_id, new_change.change_id],
-                )
+                if old_change.contract_type is ContractType.GRAPHQL:
+                    edits = graphql_argument_rename_edits(
+                        source.content,
+                        old_change.subject or "",
+                        new_change.subject or "",
+                        old_change.old_type,
+                        new_change.new_type,
+                        [old_change.change_id, new_change.change_id],
+                    )
+                else:
+                    edits = _rename_field_edits(
+                        source.content,
+                        language,
+                        old_change.subject or "",
+                        new_change.subject or "",
+                        [old_change.change_id, new_change.change_id],
+                    )
             elif removed:
                 change = removed[0]
                 edits = _remove_field_edits(
@@ -144,6 +163,14 @@ class MockPatchGenerationProvider(PatchGenerationProvider):
             files=files,
             warnings=["This proposed patch is static and has not been executed or tested."],
         )
+
+
+class MockPatchGenerationProvider(DeterministicPatchGenerationProvider):
+    """Explicit development-only compatibility provider."""
+
+    name = PatchProvider.MOCK
+    model_name = "deterministic-patch-mock-v1"
+    mode = PatchProviderMode.DETERMINISTIC_MOCK
 
 
 class GeminiPatchGenerationProvider(PatchGenerationProvider):
@@ -289,12 +316,45 @@ def _extract_text(response: dict[str, Any]) -> str:
     return text
 
 
-def _matching_pair(removed: list[Any], required: list[Any]) -> tuple[Any, Any] | None:
+def _matching_pair(
+    removed: list[Any], required: list[Any], source: str
+) -> tuple[Any, Any] | None:
     for old in removed:
         for new in required:
-            if old.path == new.path and old.method == new.method:
+            same_operation = (
+                old.operation_identifier == new.operation_identifier
+                if old.contract_type is ContractType.GRAPHQL
+                else old.path == new.path and old.method == new.method
+            )
+            one_to_one_candidate = (
+                len(removed) == 1
+                and len(required) == 1
+            )
+            if same_operation and (
+                _replacement_evidence(old, new, source) or one_to_one_candidate
+            ):
                 return old, new
     return None
+
+
+def _replacement_evidence(old: Any, new: Any, source: str) -> bool:
+    """Require explicit contract metadata or a same-object source value before renaming."""
+
+    new_name = str(new.subject or "")
+    old_name = str(old.subject or "")
+    metadata_values = {
+        str(value)
+        for metadata in (getattr(old, "metadata", {}), getattr(new, "metadata", {}))
+        for key, value in metadata.items()
+        if key in {"replacement", "replacement_field", "renamed_from", "renamed_to"}
+    }
+    if new_name in metadata_values or old_name in metadata_values:
+        return True
+    old_accesses = set(re.findall(rf"\b([A-Za-z_]\w*)\.{re.escape(old_name)}\b", source))
+    return any(
+        re.search(rf"\b{re.escape(prefix)}\.{re.escape(new_name)}\b", source)
+        for prefix in old_accesses
+    )
 
 
 def _language(path: str) -> str | None:
@@ -305,6 +365,8 @@ def _language(path: str) -> str | None:
         "jsx": "javascript",
         "ts": "typescript",
         "tsx": "typescript",
+        "gql": "graphql",
+        "graphql": "graphql",
     }.get(suffix)
 
 
@@ -324,7 +386,10 @@ def _rename_field_edits(
             _edit(
                 signature,
                 _replace_token(signature, old_identifier, new_identifier),
-                f"Rename the request value from {old_name} to {new_name}.",
+                (
+                    f"Apply the possible replacement candidate {old_name} -> {new_name}; "
+                    "confirm the value mapping during review."
+                ),
                 change_ids,
             )
         )
@@ -336,12 +401,16 @@ def _rename_field_edits(
             new_name,
             old_identifier,
             new_identifier,
+            source,
         )
         edits.append(
             _edit(
                 payload,
                 replacement,
-                f"Send the required '{new_name}' field instead of '{old_name}'.",
+                (
+                    f"Propose '{new_name}' as a possible replacement for removed "
+                    f"'{old_name}'; confirm semantics during review."
+                ),
                 change_ids,
             )
         )
@@ -442,6 +511,7 @@ def _replace_payload(
     new_field: str,
     old_identifier: str,
     new_identifier: str,
+    source: str,
 ) -> str:
     replaced = re.sub(
         rf"(['\"]){re.escape(old_field)}\1",
@@ -451,12 +521,25 @@ def _replace_payload(
     )
     if replaced == value:
         replaced = re.sub(rf"\b{re.escape(old_field)}\b(?=\s*:)", new_field, value, count=1)
-    return re.sub(
+    replaced_value = re.sub(
         rf"(?<=:)\s*{re.escape(old_identifier)}\b",
         lambda match: match.group(0).replace(old_identifier, new_identifier),
         replaced,
         count=1,
     )
+    if replaced_value != replaced:
+        return replaced_value
+    for prefix in set(
+        re.findall(rf"\b([A-Za-z_]\w*)\.{re.escape(old_field)}\b", value)
+    ):
+        if re.search(rf"\b{re.escape(prefix)}\.{re.escape(new_field)}\b", source):
+            return re.sub(
+                rf"\b{re.escape(prefix)}\.{re.escape(old_field)}\b",
+                f"{prefix}.{new_field}",
+                replaced,
+                count=1,
+            )
+    return replaced
 
 
 def _edit(

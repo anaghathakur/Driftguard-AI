@@ -6,7 +6,7 @@ from enum import StrEnum
 
 from pydantic import BaseModel, Field
 
-from apps.api.app.schemas.comparison import ComparisonResponse
+from apps.api.app.schemas.comparison import ComparisonResponse, OperationKind
 
 
 class MatchKind(StrEnum):
@@ -16,11 +16,13 @@ class MatchKind(StrEnum):
     DIRECT_SEMANTIC = "direct_semantic"
     WRAPPER = "wrapper"
     TRANSITIVE_CALL = "transitive_call"
+    GRAPHQL_LEXICAL = "graphql_lexical"
 
 
 class MatchConfidence(StrEnum):
     HIGH = "high"
     MEDIUM = "medium"
+    LOW = "low"
 
 
 class ImpactAnalysisKind(StrEnum):
@@ -32,6 +34,7 @@ class ImpactAnalysisKind(StrEnum):
 
 class ImpactTraceRelation(StrEnum):
     DIRECT_API_USAGE = "direct_api_usage"
+    DIRECT_GRAPHQL_USAGE = "direct_graphql_usage"
     CALLS = "calls"
 
 
@@ -81,8 +84,10 @@ class ImpactMatch(BaseModel):
 
 class ChangeImpact(BaseModel):
     change_id: str
-    path: str
-    method: str
+    path: str = ""
+    method: str = ""
+    operation_identifier: str | None = None
+    operation_kind: OperationKind | None = None
     matches: list[ImpactMatch]
 
 

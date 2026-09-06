@@ -6,9 +6,11 @@ import hashlib
 import hmac
 import re
 import secrets
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
-from uuid import uuid4
+from uuid import NAMESPACE_URL, uuid4, uuid5
 
+from apps.api.app.auth.authorization import Permission, authorize
 from apps.api.app.auth.provider import GitHubOAuthProvider
 from apps.api.app.core.exceptions import DriftGuardError
 from apps.api.app.core.workspace_context import WorkspacePrincipal
@@ -42,9 +44,13 @@ class AuthService:
         self.session_ttl_hours = session_ttl_hours
         self.session_secret = session_secret.encode()
 
-    def begin(self, return_to: str | None = None) -> str:
+    def begin(
+        self,
+        return_to: str | None = None,
+        identity_hint: str | None = None,
+    ) -> str:
         state = self.issue_state(return_to)
-        return self.provider.authorization_url(state, self.callback_url)
+        return self.provider.authorization_url(state, self.callback_url, identity_hint)
 
     def issue_state(self, return_to: str | None = None) -> str:
         target = self._safe_return_to(return_to)
@@ -69,19 +75,26 @@ class AuthService:
         stored = self.consume_state(state)
         identity = await self.provider.resolve_identity(code, self.callback_url)
         now = _now()
-        existing = self.repository.get_user_by_github_id(identity.github_user_id)
+        subject = str(identity.github_user_id)
+        existing = self.repository.get_user_by_external_identity("github", subject)
         user = self.repository.upsert_user(
             User(
-                existing.user_id if existing else str(uuid4()),
-                identity.github_user_id,
-                identity.login,
-                identity.display_name,
-                identity.avatar_url,
-                existing.created_at if existing else now,
-                now,
+                user_id=existing.user_id if existing else str(uuid4()),
+                github_user_id=identity.github_user_id,
+                github_login=identity.login,
+                github_display_name=identity.display_name,
+                avatar_url=identity.avatar_url,
+                created_at=existing.created_at if existing else now,
+                updated_at=now,
+                external_auth_provider="github",
+                external_subject=subject,
             )
         )
         memberships = self.repository.list_memberships(user.user_id)
+        workspace_created = False
+        if not memberships:
+            membership, workspace, workspace_created = self._ensure_personal_workspace(user)
+            memberships = [(membership, workspace)]
         session_token = secrets.token_urlsafe(48)
         csrf_token = secrets.token_urlsafe(32)
         self.repository.save_session(
@@ -95,7 +108,12 @@ class AuthService:
             )
         )
         self.audit(None, user.user_id, "user.signed_in", "user", user.user_id)
-        return session_token, csrf_token, stored.return_to
+        return_to = (
+            f"{self.frontend_url}/app/onboarding"
+            if workspace_created
+            else stored.return_to
+        )
+        return session_token, csrf_token, return_to
 
     def authenticate(self, token: str | None) -> tuple[AuthSession, User, Workspace | None]:
         if not token:
@@ -131,7 +149,12 @@ class AuthService:
                 message="Create or select a workspace before using team resources.",
                 status_code=409,
             )
-        return WorkspacePrincipal(workspace.workspace_id, user.user_id, user.github_login)
+        membership = self.repository.get_membership(user.user_id, workspace.workspace_id)
+        if membership is None:
+            raise _workspace_access_denied()
+        return WorkspacePrincipal(
+            workspace.workspace_id, user.user_id, user.github_login, role=membership.role
+        )
 
     def verify_csrf(self, session: AuthSession, token: str | None) -> None:
         if not token or not secrets.compare_digest(session.csrf_hash, self._hash(token)):
@@ -152,7 +175,14 @@ class AuthService:
         now = _now()
         workspace_id = str(uuid4())
         base_slug = re.sub(r"[^a-z0-9]+", "-", clean_name.lower()).strip("-") or "workspace"
-        workspace = Workspace(workspace_id, clean_name, f"{base_slug}-{workspace_id[:8]}", now, now)
+        workspace = Workspace(
+            workspace_id,
+            clean_name,
+            f"{base_slug}-{workspace_id[:8]}",
+            now,
+            now,
+            user.user_id,
+        )
         membership = WorkspaceMembership(
             str(uuid4()), workspace_id, user.user_id, WorkspaceRole.OWNER, now
         )
@@ -160,6 +190,49 @@ class AuthService:
         self.repository.update_session_workspace(session.session_hash, workspace_id)
         self.audit(workspace_id, user.user_id, "workspace.created", "workspace", workspace_id)
         return workspace
+
+    def _ensure_personal_workspace(
+        self, user: User
+    ) -> tuple[WorkspaceMembership, Workspace, bool]:
+        now = _now()
+        workspace_id = str(
+            uuid5(NAMESPACE_URL, f"driftguard:personal-workspace:{user.user_id}")
+        )
+        membership_id = str(
+            uuid5(NAMESPACE_URL, f"driftguard:personal-membership:{user.user_id}")
+        )
+        identity_name = user.github_display_name or user.github_login
+        clean_identity = " ".join(identity_name.split())[:60] or "Developer"
+        workspace = Workspace(
+            workspace_id=workspace_id,
+            name=f"{clean_identity}'s workspace",
+            slug=f"personal-{workspace_id[:12]}",
+            created_at=now,
+            updated_at=now,
+            created_by_user_id=user.user_id,
+        )
+        membership = WorkspaceMembership(
+            membership_id=membership_id,
+            workspace_id=workspace_id,
+            user_id=user.user_id,
+            role=WorkspaceRole.OWNER,
+            created_at=now,
+        )
+        created = self.repository.ensure_workspace(workspace, membership)
+        persisted_workspace = self.repository.get_workspace(workspace_id) or workspace
+        persisted_membership = (
+            self.repository.get_membership(user.user_id, workspace_id) or membership
+        )
+        if created:
+            self.audit(
+                workspace_id,
+                user.user_id,
+                "workspace.created",
+                "workspace",
+                workspace_id,
+                {"creation_mode": "automatic_personal"},
+            )
+        return persisted_membership, persisted_workspace, created
 
     def switch_workspace(self, session: AuthSession, user: User, workspace_id: str) -> Workspace:
         if self.repository.get_membership(user.user_id, workspace_id) is None:
@@ -178,6 +251,90 @@ class AuthService:
         self.repository.update_session_workspace(session.session_hash, workspace_id)
         return workspace
 
+    def list_members(self, principal: WorkspacePrincipal) -> list[tuple[WorkspaceMembership, User]]:
+        authorize(Permission.READ_WORKSPACE, principal)
+        return self.repository.list_workspace_members(principal.workspace_id)
+
+    def change_member_role(
+        self,
+        principal: WorkspacePrincipal,
+        target_user_id: str,
+        new_role: WorkspaceRole,
+    ) -> WorkspaceMembership:
+        authorize(Permission.MANAGE_MEMBERS, principal)
+        current = self.repository.get_membership(target_user_id, principal.workspace_id)
+        if current is None:
+            raise _member_not_found()
+        self._check_role_change(principal, current, new_role)
+        if (
+            current.role == WorkspaceRole.OWNER
+            and new_role != WorkspaceRole.OWNER
+            and self.repository.count_members_by_role(principal.workspace_id, WorkspaceRole.OWNER)
+            <= 1
+        ):
+            raise _last_owner()
+        updated = self.repository.save_membership(replace(current, role=new_role))
+        self.audit(
+            principal.workspace_id,
+            principal.user_id,
+            "membership.role_changed",
+            "membership",
+            current.membership_id,
+            {
+                "target_user_id": target_user_id,
+                "previous_role": current.role.value,
+                "new_role": new_role.value,
+            },
+        )
+        return updated
+
+    def remove_member(self, principal: WorkspacePrincipal, target_user_id: str) -> None:
+        authorize(Permission.MANAGE_MEMBERS, principal)
+        current = self.repository.get_membership(target_user_id, principal.workspace_id)
+        if current is None:
+            raise _member_not_found()
+        self._check_role_change(principal, current, None)
+        if (
+            current.role == WorkspaceRole.OWNER
+            and self.repository.count_members_by_role(principal.workspace_id, WorkspaceRole.OWNER)
+            <= 1
+        ):
+            raise _last_owner()
+        if not self.repository.delete_membership(target_user_id, principal.workspace_id):
+            raise _member_not_found()
+        self.audit(
+            principal.workspace_id,
+            principal.user_id,
+            "membership.removed",
+            "membership",
+            current.membership_id,
+            {"target_user_id": target_user_id, "previous_role": current.role.value},
+        )
+
+    def list_audit_events(
+        self, principal: WorkspacePrincipal, limit: int = 100
+    ) -> list[AuditEvent]:
+        authorize(Permission.READ_AUDIT, principal)
+        return self.repository.list_audit_events(principal.workspace_id, min(max(limit, 1), 200))
+
+    def _check_role_change(
+        self,
+        principal: WorkspacePrincipal,
+        target: WorkspaceMembership,
+        requested: WorkspaceRole | None,
+    ) -> None:
+        if principal.role == WorkspaceRole.OWNER:
+            return
+        if principal.role != WorkspaceRole.ADMIN:
+            raise _permission_denied()
+        protected = {WorkspaceRole.OWNER, WorkspaceRole.ADMIN}
+        if target.role in protected or requested in protected:
+            raise DriftGuardError(
+                code="role_escalation_denied",
+                message="Admins cannot modify owners or admins, or assign those roles.",
+                status_code=403,
+            )
+
     def logout(self, session: AuthSession) -> None:
         self.repository.delete_session(session.session_hash)
 
@@ -195,6 +352,9 @@ class AuthService:
             for key, value in (metadata or {}).items()
             if key.lower() not in {"token", "secret", "authorization", "cookie", "code"}
         }
+        if len(repr(safe)) > 8192:
+            safe = {"metadata_truncated": True}
+
         self.repository.save_audit_event(
             AuditEvent(
                 str(uuid4()),
@@ -231,4 +391,36 @@ def _now() -> datetime:
 def _auth_required() -> DriftGuardError:
     return DriftGuardError(
         code="auth_required", message="Sign in with GitHub to continue.", status_code=401
+    )
+
+
+def _workspace_access_denied() -> DriftGuardError:
+    return DriftGuardError(
+        code="workspace_access_denied",
+        message="The active workspace is not available to this user.",
+        status_code=403,
+    )
+
+
+def _member_not_found() -> DriftGuardError:
+    return DriftGuardError(
+        code="workspace_member_not_found",
+        message="The requested workspace member was not found.",
+        status_code=404,
+    )
+
+
+def _last_owner() -> DriftGuardError:
+    return DriftGuardError(
+        code="last_owner_required",
+        message="A workspace must retain at least one owner.",
+        status_code=409,
+    )
+
+
+def _permission_denied() -> DriftGuardError:
+    return DriftGuardError(
+        code="permission_denied",
+        message="Your workspace role does not allow this action.",
+        status_code=403,
     )

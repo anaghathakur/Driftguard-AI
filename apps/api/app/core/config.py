@@ -110,6 +110,7 @@ def _origins(name: str, default: tuple[str, ...]) -> tuple[str, ...]:
 
 @dataclass(frozen=True, slots=True)
 class Settings:
+    deployment_environment: str = os.getenv("DRIFTGUARD_ENVIRONMENT", "development").strip().lower()
     app_name: str = "DriftGuard AI"
     api_prefix: str = "/api/v1"
 
@@ -179,7 +180,33 @@ class Settings:
     ai_provider: str = (
         os.getenv(
             "DRIFTGUARD_AI_PROVIDER",
-            "mock",
+            "deterministic",
+        )
+        .strip()
+        .lower()
+    )
+
+    migration_provider: str = (
+        os.getenv(
+            "DRIFTGUARD_MIGRATION_PROVIDER",
+            (
+                "gemini"
+                if os.getenv("DRIFTGUARD_AI_PROVIDER", "").strip().lower() == "gemini"
+                else "deterministic"
+            ),
+        )
+        .strip()
+        .lower()
+    )
+
+    patch_provider: str = (
+        os.getenv(
+            "DRIFTGUARD_PATCH_PROVIDER",
+            (
+                "gemini"
+                if os.getenv("DRIFTGUARD_AI_PROVIDER", "").strip().lower() == "gemini"
+                else "deterministic"
+            ),
         )
         .strip()
         .lower()
@@ -245,6 +272,22 @@ class Settings:
         5 * 1024 * 1024,
     )
 
+    max_graphql_document_bytes: int = _positive_int(
+        "DRIFTGUARD_MAX_GRAPHQL_DOCUMENT_BYTES",
+        5 * 1024 * 1024,
+    )
+    max_graphql_ast_nodes: int = _positive_int(
+        "DRIFTGUARD_MAX_GRAPHQL_AST_NODES",
+        100_000,
+    )
+    max_graphql_changes: int = _positive_int(
+        "DRIFTGUARD_MAX_GRAPHQL_CHANGES",
+        1_000,
+    )
+    max_graphql_query_documents: int = _positive_int(
+        "DRIFTGUARD_MAX_GRAPHQL_QUERY_DOCUMENTS",
+        500,
+    )
     max_repository_archive_bytes: int = _positive_int(
         "DRIFTGUARD_MAX_REPOSITORY_ARCHIVE_BYTES",
         20 * 1024 * 1024,
@@ -252,12 +295,12 @@ class Settings:
 
     max_repository_files: int = _positive_int(
         "DRIFTGUARD_MAX_REPOSITORY_FILES",
-        2_000,
+        10_000,
     )
 
     max_repository_file_bytes: int = _positive_int(
         "DRIFTGUARD_MAX_REPOSITORY_FILE_BYTES",
-        1024 * 1024,
+        2 * 1024 * 1024,
     )
 
     max_repository_uncompressed_bytes: int = _positive_int(
@@ -274,10 +317,10 @@ class Settings:
         "DRIFTGUARD_MAX_REPOSITORY_TREE_ENTRIES", 20_000
     )
     max_repository_source_files: int = _positive_int(
-        "DRIFTGUARD_MAX_REPOSITORY_SOURCE_FILES", 2_000
+        "DRIFTGUARD_MAX_REPOSITORY_SOURCE_FILES", 7_500
     )
     max_repository_source_file_bytes: int = _positive_int(
-        "DRIFTGUARD_MAX_REPOSITORY_SOURCE_FILE_BYTES", 1024 * 1024
+        "DRIFTGUARD_MAX_REPOSITORY_SOURCE_FILE_BYTES", 2 * 1024 * 1024
     )
     max_repository_source_bytes: int = _positive_int(
         "DRIFTGUARD_MAX_REPOSITORY_SOURCE_BYTES", 25 * 1024 * 1024
@@ -326,10 +369,24 @@ class Settings:
     test_plan_provider: str = (
         os.getenv(
             "DRIFTGUARD_TEST_PLAN_PROVIDER",
-            "mock",
+            "deterministic",
         )
         .strip()
         .lower()
+    )
+
+    validation_execution_provider: str = (
+        os.getenv("DRIFTGUARD_VALIDATION_EXECUTION_PROVIDER", "disabled").strip().lower()
+    )
+
+    validation_command_timeout_seconds: float = _positive_float(
+        "DRIFTGUARD_VALIDATION_COMMAND_TIMEOUT_SECONDS",
+        60.0,
+    )
+
+    validation_output_max_bytes: int = _positive_int(
+        "DRIFTGUARD_VALIDATION_OUTPUT_MAX_BYTES",
+        100_000,
     )
 
     max_validation_findings: int = _positive_int(
@@ -381,30 +438,62 @@ class Settings:
         1024 * 1024,
     )
 
-    github_webhook_secret: str = os.getenv(
-        "DRIFTGUARD_GITHUB_WEBHOOK_SECRET", ""
-    ).strip()
-    max_webhook_bytes: int = _positive_int(
-        "DRIFTGUARD_MAX_WEBHOOK_BYTES", 2 * 1024 * 1024
-    )
-    automation_worker_enabled: bool = _boolean(
-        "DRIFTGUARD_AUTOMATION_WORKER_ENABLED", False
-    )
+    github_webhook_secret: str = os.getenv("DRIFTGUARD_GITHUB_WEBHOOK_SECRET", "").strip()
+    max_webhook_bytes: int = _positive_int("DRIFTGUARD_MAX_WEBHOOK_BYTES", 2 * 1024 * 1024)
+    automation_worker_enabled: bool = _boolean("DRIFTGUARD_AUTOMATION_WORKER_ENABLED", False)
     automation_worker_poll_seconds: float = _positive_float(
         "DRIFTGUARD_AUTOMATION_WORKER_POLL_SECONDS", 5.0
     )
-    automation_max_retries: int = _non_negative_int(
-        "DRIFTGUARD_AUTOMATION_MAX_RETRIES", 3
-    )
+    automation_max_retries: int = _non_negative_int("DRIFTGUARD_AUTOMATION_MAX_RETRIES", 3)
     automation_retry_base_seconds: float = _positive_float(
         "DRIFTGUARD_AUTOMATION_RETRY_BASE_SECONDS", 15.0
     )
-    github_check_provider: str = os.getenv(
-        "DRIFTGUARD_GITHUB_CHECK_PROVIDER", "mock"
-    ).strip().lower()
-    max_check_annotations: int = _positive_int(
-        "DRIFTGUARD_MAX_CHECK_ANNOTATIONS", 50
+    github_check_provider: str = (
+        os.getenv("DRIFTGUARD_GITHUB_CHECK_PROVIDER", "mock").strip().lower()
     )
+    max_check_annotations: int = _positive_int("DRIFTGUARD_MAX_CHECK_ANNOTATIONS", 50)
 
 
 settings = Settings()
+
+
+def validate_security_settings(value: Settings) -> None:
+    if value.deployment_environment not in {"development", "test", "production"}:
+        raise RuntimeError("DRIFTGUARD_ENVIRONMENT must be 'development', 'test', or 'production'")
+    if value.auth_mode not in {"local", "github"}:
+        raise RuntimeError("DRIFTGUARD_AUTH_MODE must be 'local' or 'github'")
+    if value.github_oauth_provider not in {"github", "mock"}:
+        raise RuntimeError("DRIFTGUARD_GITHUB_OAUTH_PROVIDER must be 'github' or 'mock'")
+    if value.deployment_environment != "production":
+        return
+    problems: list[str] = []
+    if value.auth_mode != "github":
+        problems.append("production requires DRIFTGUARD_AUTH_MODE=github")
+    if value.github_oauth_provider != "github":
+        problems.append("production prohibits the mock OAuth provider")
+    if value.migration_provider == "mock":
+        problems.append("production prohibits the mock migration provider")
+    if value.patch_provider == "mock":
+        problems.append("production prohibits the mock patch provider")
+    if value.test_plan_provider == "mock":
+        problems.append("production prohibits the mock test-plan provider")
+    if value.github_write_provider == "mock":
+        problems.append("production prohibits the mock GitHub write provider")
+    if value.github_check_provider == "mock":
+        problems.append("production prohibits the mock GitHub Check provider")
+    if value.validation_execution_provider == "local":
+        problems.append("production prohibits the process-local validation runner")
+    if len(value.session_secret) < 32:
+        problems.append("DRIFTGUARD_SESSION_SECRET must contain at least 32 characters")
+    if not value.secure_cookies:
+        problems.append("production requires DRIFTGUARD_SECURE_COOKIES=true")
+    if not value.github_oauth_client_id or not value.github_oauth_client_secret:
+        problems.append("production GitHub OAuth credentials are required")
+    callback = urlsplit(value.github_oauth_callback_url)
+    if callback.scheme != "https" or not callback.netloc:
+        problems.append("production OAuth callback URL must use HTTPS")
+    frontend = urlsplit(value.frontend_url)
+    if frontend.scheme != "https" or not frontend.netloc:
+        problems.append("production frontend URL must use HTTPS")
+    if problems:
+        raise RuntimeError("Unsafe production authentication configuration: " + "; ".join(problems))
