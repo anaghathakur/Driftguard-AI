@@ -12,7 +12,6 @@ locals {
     "github-app-id",
     "github-app-private-key",
     "github-webhook-secret",
-    "gemini-api-key",
   ])
   job_environment = {
     DRIFTGUARD_ENVIRONMENT                       = "production"

@@ -19,7 +19,7 @@ state for a shared environment.
 - Cloud Run Jobs: one bounded automation pass and one bounded monitor pass
 - Cloud Scheduler: invokes each job once per minute
 - Firestore Native: tenant, analysis, subscription, and durable automation state
-- Secret Manager: session, GitHub OAuth/App, webhook, and optional Gemini secrets
+- Secret Manager: session, GitHub OAuth/App, and webhook secrets
 - Artifact Registry: immutable container images
 
 Cloud Run public invocation defaults to disabled for the private bootstrap
