@@ -139,7 +139,7 @@ resource "google_cloud_run_v2_service" "api" {
     service_account = google_service_account.runtime.email
 
     scaling {
-      min_instance_count = 1
+      min_instance_count = var.api_min_instances
       max_instance_count = var.api_max_instances
     }
 

@@ -29,6 +29,10 @@ workspace authorization, CSRF checks, and the distributed Firestore limiter.
 This is suitable only for the restricted beta described here; a broader public
 launch should add an external Application Load Balancer and Cloud Armor.
 
+The controlled-beta default sets the API minimum instance count to zero to
+avoid an idle Cloud Run baseline. Increase api_min_instances only after
+accepting the associated recurring cost for lower cold-start latency.
+
 The approved project already has the Firestore Native database
 driftguard-db in asia-south1. Terraform and Cloud Run are configured to use
 that database. During the later reviewed deployment, import it into Terraform

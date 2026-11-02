@@ -73,3 +73,9 @@ variable "api_max_instances" {
   default     = 10
   description = "Cloud Run API maximum instance count."
 }
+
+variable "api_min_instances" {
+  type        = number
+  default     = 0
+  description = "Cloud Run API minimum instance count. Zero avoids an idle beta baseline cost."
+}

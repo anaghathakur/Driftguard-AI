@@ -13,3 +13,4 @@ firestore_database_id    = "driftguard-db"
 enable_firestore_deletion_protection = false
 # Controlled beta access policy, not a secret.
 beta_allowed_github_logins = "replace-with-approved-github-login"
+api_min_instances          = 0
