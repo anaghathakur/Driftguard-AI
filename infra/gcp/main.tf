@@ -329,6 +329,8 @@ resource "google_cloud_run_v2_service" "web" {
 # browser API requests. DriftGuard itself still requires a verified GitHub
 # session plus workspace authorization for every product operation.
 resource "google_cloud_run_v2_service_iam_member" "api_public_invoker" {
+  count = var.public_transport_enabled ? 1 : 0
+
   project  = var.project_id
   location = var.region
   name     = google_cloud_run_v2_service.api.name
@@ -337,6 +339,8 @@ resource "google_cloud_run_v2_service_iam_member" "api_public_invoker" {
 }
 
 resource "google_cloud_run_v2_service_iam_member" "web_public_invoker" {
+  count = var.public_transport_enabled ? 1 : 0
+
   project  = var.project_id
   location = var.region
   name     = google_cloud_run_v2_service.web.name

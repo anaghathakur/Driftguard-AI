@@ -14,3 +14,6 @@ enable_firestore_deletion_protection = false
 # Controlled beta access policy, not a secret.
 beta_allowed_github_logins = "replace-with-approved-github-login"
 api_min_instances          = 0
+# Keep false for the private bootstrap revision; set true only for the final,
+# reviewed, configured controlled-beta revision.
+public_transport_enabled = false

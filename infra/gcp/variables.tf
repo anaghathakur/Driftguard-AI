@@ -79,3 +79,9 @@ variable "api_min_instances" {
   default     = 0
   description = "Cloud Run API minimum instance count. Zero avoids an idle beta baseline cost."
 }
+
+variable "public_transport_enabled" {
+  type        = bool
+  default     = false
+  description = "Grant public Cloud Run invocation only after final OAuth, secret, and browser configuration is verified."
+}

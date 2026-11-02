@@ -22,12 +22,14 @@ state for a shared environment.
 - Secret Manager: session, GitHub OAuth/App, webhook, and optional Gemini secrets
 - Artifact Registry: immutable container images
 
-The Cloud Run service transport is publicly invokable for the public landing
-page, GitHub OAuth callback, and browser API requests. Product routes remain
-protected by GitHub authentication, the controlled-beta login allowlist,
-workspace authorization, CSRF checks, and the distributed Firestore limiter.
-This is suitable only for the restricted beta described here; a broader public
-launch should add an external Application Load Balancer and Cloud Armor.
+Cloud Run public invocation defaults to disabled for the private bootstrap
+revision. Turn public_transport_enabled on only in the final reviewed beta
+revision, after GitHub OAuth, Secret Manager versions, and the frontend/API
+origins are configured. Product routes remain protected by GitHub
+authentication, the controlled-beta login allowlist, workspace authorization,
+CSRF checks, and the distributed Firestore limiter. This is suitable only for
+the restricted beta described here; a broader public launch should add an
+external Application Load Balancer and Cloud Armor.
 
 The controlled-beta default sets the API minimum instance count to zero to
 avoid an idle Cloud Run baseline. Increase api_min_instances only after
