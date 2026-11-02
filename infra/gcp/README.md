@@ -81,6 +81,7 @@ The main deployment stack manages:
 - cloudscheduler.googleapis.com
 - firestore.googleapis.com
 - iam.googleapis.com for service accounts
+- iamcredentials.googleapis.com for Cloud Scheduler OAuth invocation tokens
 - logging.googleapis.com
 - monitoring.googleapis.com
 - run.googleapis.com
