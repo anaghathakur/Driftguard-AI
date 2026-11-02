@@ -108,12 +108,12 @@ async def readiness(response: Response) -> dict[str, object]:
             "github_webhooks": (
                 "ready" if settings.github_webhook_secret else "disabled"
             ),
-            "background_jobs": "sqlite_durable",
+            "background_jobs": _automation_persistence_status(),
             "automation_worker": (
                 "process_local_enabled" if settings.automation_worker_enabled else "disabled"
             ),
             "github_checks": settings.github_check_provider,
-            "automation_persistence": "sqlite_sidecar",
+            "automation_persistence": _automation_persistence_status(),
         "issues": issues,
     }
 
@@ -174,4 +174,12 @@ def _github_write_status() -> str:
             if settings.deployment_environment != "production"
             else "unavailable"
         )
+    return "unavailable"
+
+
+def _automation_persistence_status() -> str:
+    if settings.storage_backend == "firestore":
+        return "firestore_durable"
+    if settings.storage_backend == "sqlite":
+        return "sqlite_single_instance"
     return "unavailable"

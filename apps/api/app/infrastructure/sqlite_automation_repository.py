@@ -7,7 +7,8 @@ import json
 import sqlite3
 from collections.abc import Iterator
 from contextlib import contextmanager
-from datetime import datetime
+from dataclasses import replace
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from apps.api.app.domain.automation import (
@@ -185,6 +186,44 @@ class SQLiteAutomationRepository(AutomationRepository):
                 for job_id in ids
             ]
         return [_job(row) for row in claimed]
+
+    def recover_stale_jobs(
+        self, now: datetime, *, retry_limit: int, stale_after_seconds: float
+    ) -> list[BackgroundJob]:
+        cutoff = now - timedelta(seconds=max(1.0, stale_after_seconds))
+        recovered: list[BackgroundJob] = []
+        with self._transaction() as connection:
+            rows = connection.execute(
+                """SELECT * FROM background_jobs
+                   WHERE status = ? AND started_at IS NOT NULL AND started_at <= ?
+                   ORDER BY started_at""",
+                (BackgroundJobStatus.RUNNING.value, _iso(cutoff)),
+            ).fetchall()
+            for row in rows:
+                job = _job(row)
+                retry = job.attempt_count <= retry_limit
+                updated = replace(
+                    job,
+                    status=(
+                        BackgroundJobStatus.RETRY_SCHEDULED
+                        if retry
+                        else BackgroundJobStatus.FAILED
+                    ),
+                    completed_at=None if retry else now,
+                    next_attempt_at=now if retry else None,
+                    failure_code="worker_interrupted",
+                    failure_message_safe=(
+                        "A background worker stopped before this job completed."
+                        if retry
+                        else "A background worker stopped and the retry limit was reached."
+                    ),
+                )
+                connection.execute(
+                    "INSERT OR REPLACE INTO background_jobs VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    _job_values(updated),
+                )
+                recovered.append(updated)
+        return recovered
 
     def save_job(self, job: BackgroundJob) -> None:
         with self._transaction() as connection:

@@ -6,7 +6,7 @@ import asyncio
 import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from time import perf_counter
 from uuid import uuid4
 
@@ -18,6 +18,7 @@ from apps.api.app.domain.monitor import (
     MonitorCheckRecord,
     MonitorCheckStatus,
 )
+from apps.api.app.monitoring.github_file_source import GitHubFileContractSource
 from apps.api.app.monitoring.specification_source import (
     OpenApiSpecificationSource,
 )
@@ -45,11 +46,13 @@ class ApiMonitorService:
         self,
         repository: ApiMonitorRepository,
         specification_source: OpenApiSpecificationSource,
+        github_file_source: GitHubFileContractSource | None = None,
         *,
         clock: Clock = lambda: datetime.now(UTC),
     ) -> None:
         self.repository = repository
         self.specification_source = specification_source
+        self.github_file_source = github_file_source
         self.clock = clock
 
     async def create(self, request: MonitorCreateRequest) -> MonitorResponse:
@@ -58,12 +61,27 @@ class ApiMonitorService:
             request.repository_url,
             request.repository_ref,
         )
-        specification = await self.specification_source.fetch(request.specification_url)
+        if request.source_type.value == "github_file":
+            source = self._require_github_file_source()
+            fetched = await source.fetch(
+                request.repository_connection_id or "",
+                request.source_path or "",
+                request.repository_ref,
+            )
+            specification = fetched.specification
+            repository_url = fetched.repository.html_url
+            # Keep the user-selected ref (or None for the repository default
+            # branch) as the subscription target. The resolved commit is used
+            # only as immutable evidence for a particular analysis; persisting
+            # it here would silently pin future checks to the original baseline.
+            repository_ref = request.repository_ref
+        else:
+            specification = await self.specification_source.fetch(request.specification_url or "")
         now = self.clock()
         monitor = ApiMonitor(
             monitor_id=str(uuid4()),
             name=request.name.strip(),
-            specification_url=request.specification_url.strip(),
+            specification_url=(request.specification_url or "").strip(),
             repository_url=repository_url,
             repository_ref=repository_ref,
             check_interval_minutes=request.check_interval_minutes,
@@ -74,6 +92,10 @@ class ApiMonitorService:
             baseline_observed_at=now,
             created_at=now,
             updated_at=now,
+            source_type=request.source_type,
+            source_path=request.source_path,
+            repository_connection_id=request.repository_connection_id,
+            contract_type=specification.contract_type,
         )
         self.repository.create(monitor)
         return monitor_response(monitor)
@@ -144,6 +166,15 @@ class ApiMonitorService:
             _monitor_not_found()
         return monitor
 
+    def _require_github_file_source(self) -> GitHubFileContractSource:
+        if self.github_file_source is None:
+            raise DriftGuardError(
+                code="github_contract_source_not_configured",
+                message="GitHub contract-file subscriptions are not configured.",
+                status_code=503,
+            )
+        return self.github_file_source
+
 
 class MonitorCheckService:
     def __init__(
@@ -152,15 +183,19 @@ class MonitorCheckService:
         specification_source: OpenApiSpecificationSource,
         github_source: GitHubRepositorySource,
         analysis_pipeline: AnalysisPipelineService,
+        github_file_source: GitHubFileContractSource | None = None,
         *,
         clock: Clock = lambda: datetime.now(UTC),
+        check_lease_seconds: int = 15 * 60,
         consumer_dispatcher: ConsumerDispatcher | None = None,
     ) -> None:
         self.repository = repository
         self.specification_source = specification_source
         self.github_source = github_source
         self.analysis_pipeline = analysis_pipeline
+        self.github_file_source = github_file_source
         self.clock = clock
+        self.check_lease_seconds = check_lease_seconds
         self._active: set[str] = set()
         self.consumer_dispatcher = consumer_dispatcher
         self._active_guard = asyncio.Lock()
@@ -191,11 +226,20 @@ class MonitorCheckService:
             self._active.add(monitor_id)
 
     async def _check_claimed(self, monitor_id: str) -> MonitorCheckResponse:
-        monitor = self.repository.get(monitor_id)
-        if monitor is None:
-            _monitor_not_found()
-
         checked_at = self.clock()
+        monitor = self.repository.claim_check(
+            monitor_id,
+            now=checked_at,
+            lease_expires_at=checked_at + timedelta(seconds=self.check_lease_seconds),
+        )
+        if monitor is None:
+            if self.repository.get(monitor_id) is None:
+                _monitor_not_found()
+            raise DriftGuardError(
+                code="monitor_check_in_progress",
+                message="This API monitor is already being checked.",
+                status_code=409,
+            )
         started_clock = perf_counter()
         check = MonitorCheckRecord(
             check_id=str(uuid4()),
@@ -221,7 +265,22 @@ class MonitorCheckService:
         observed_hash: str | None = None
 
         try:
-            specification = await self.specification_source.fetch(monitor.specification_url)
+            github_file = None
+            if monitor.source_type.value == "github_file":
+                if self.github_file_source is None:
+                    raise DriftGuardError(
+                        code="github_contract_source_not_configured",
+                        message="GitHub contract-file subscriptions are not configured.",
+                        status_code=503,
+                    )
+                github_file = await self.github_file_source.fetch(
+                    monitor.repository_connection_id or "",
+                    monitor.source_path or "",
+                    monitor.repository_ref,
+                )
+                specification = github_file.specification
+            else:
+                specification = await self.specification_source.fetch(monitor.specification_url)
             observed_hash = specification.sha256
             completed_at = self.clock()
             if specification.sha256 == monitor.baseline_sha256:
@@ -239,26 +298,58 @@ class MonitorCheckService:
                     last_check_status=MonitorCheckStatus.UNCHANGED,
                     last_error_code=None,
                     last_error_message=None,
+                    check_lease_expires_at=None,
                 )
                 self.repository.finish_check(finished_monitor, finished_check)
                 return check_response(finished_check)
 
-            archive = await self.github_source.fetch(
-                monitor.repository_url,
-                ref=monitor.repository_ref,
-            )
-            analysis = self.analysis_pipeline.analyze_impact(
-                old_filename=monitor.baseline_filename,
-                old_content=monitor.baseline_content,
-                new_filename=specification.filename,
-                new_content=specification.content,
-                repository_filename=archive.filename,
-                repository_content=archive.content,
-                repository_source_type=RepositorySourceType.GITHUB,
-                repository_url=monitor.repository_url,
-                repository_ref=archive.ref,
-                repository_commit_sha=archive.commit_sha,
-            )
+            if github_file is not None:
+                archive = await self.github_file_source.fetch_repository(
+                    github_file.repository,
+                    github_file.commit_sha,
+                )
+                analysis = self.analysis_pipeline.analyze_impact(
+                    old_filename=monitor.baseline_filename,
+                    old_content=monitor.baseline_content,
+                    new_filename=specification.filename,
+                    new_content=specification.content,
+                    repository_filename=archive.filename,
+                    repository_content=archive.content,
+                    repository_source_type=RepositorySourceType.GITHUB,
+                    repository_url=github_file.repository.html_url,
+                    repository_ref=archive.ref,
+                    repository_commit_sha=archive.commit_sha,
+                )
+                commit_sha = archive.commit_sha
+            elif monitor.repository_url:
+                archive = await self.github_source.fetch(
+                    monitor.repository_url,
+                    ref=monitor.repository_ref,
+                )
+                analysis = self.analysis_pipeline.analyze_impact(
+                    old_filename=monitor.baseline_filename,
+                    old_content=monitor.baseline_content,
+                    new_filename=specification.filename,
+                    new_content=specification.content,
+                    repository_filename=archive.filename,
+                    repository_content=archive.content,
+                    repository_source_type=RepositorySourceType.GITHUB,
+                    repository_url=monitor.repository_url,
+                    repository_ref=archive.ref,
+                    repository_commit_sha=archive.commit_sha,
+                )
+                commit_sha = archive.commit_sha
+            else:
+                # A subscription may be useful as contract intelligence before a
+                # consumer repository is connected. Preserve the durable analysis,
+                # but do not fabricate source impact or a patch.
+                analysis = self.analysis_pipeline.compare(
+                    old_filename=monitor.baseline_filename,
+                    old_content=monitor.baseline_content,
+                    new_filename=specification.filename,
+                    new_content=specification.content,
+                )
+                commit_sha = ""
             completed_at = self.clock()
             finished_check = replace(
                 check,
@@ -281,12 +372,14 @@ class MonitorCheckService:
                 last_check_status=MonitorCheckStatus.CHANGED,
                 last_error_code=None,
                 last_error_message=None,
+                contract_type=specification.contract_type,
+                check_lease_expires_at=None,
             )
             self.repository.finish_check(finished_monitor, finished_check)
-            if self.consumer_dispatcher:
+            if self.consumer_dispatcher and finished_monitor.repository_url and commit_sha:
                 try:
                     await self.consumer_dispatcher(
-                        finished_monitor, analysis.analysis_id, archive.commit_sha
+                        finished_monitor, analysis.analysis_id, commit_sha
                     )
                 except Exception as dispatch_error:
                     logger.warning(
@@ -314,22 +407,26 @@ class MonitorCheckService:
                 last_check_status=MonitorCheckStatus.FAILED,
                 last_error_code=error.code,
                 last_error_message=error.message,
+                check_lease_expires_at=None,
             )
             self.repository.finish_check(failed_monitor, failed_check)
             raise error from exc
 
 
 def monitor_response(monitor: ApiMonitor) -> MonitorResponse:
-    return MonitorResponse(
-        **{field: getattr(monitor, field) for field in MonitorResponse.model_fields}
-    )
+    values = {field: getattr(monitor, field) for field in MonitorResponse.model_fields}
+    values["repository_url"] = monitor.repository_url or None
+    values["specification_url"] = monitor.specification_url or None
+    return MonitorResponse(**values)
 
 
 def check_response(check: MonitorCheckRecord) -> MonitorCheckResponse:
     return MonitorCheckResponse.model_validate(check, from_attributes=True)
 
 
-def _validated_repository(url: str, ref: str | None) -> tuple[str, str | None]:
+def _validated_repository(url: str | None, ref: str | None) -> tuple[str, str | None]:
+    if not url:
+        return "", None
     parsed = parse_github_repository_url(url)
     normalized_url = f"https://github.com/{parsed.owner}/{parsed.repository}"
     return normalized_url, validate_github_ref(ref)

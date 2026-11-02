@@ -309,12 +309,45 @@ class SQLiteAnalysisRepository(AnalysisRepository):
         self.database_path.parent.mkdir(parents=True, exist_ok=True)
         with self._connect() as connection:
             connection.executescript(SCHEMA)
+            connection.execute(
+                "CREATE TABLE IF NOT EXISTS analysis_contract_sources ("
+                "analysis_id TEXT PRIMARY KEY REFERENCES analyses(analysis_id) ON DELETE CASCADE,"
+                "old_content BLOB NOT NULL, new_content BLOB NOT NULL)"
+            )
             _ensure_analysis_source_columns(connection)
             _ensure_analysis_change_columns(connection)
             _ensure_repository_match_columns(connection)
             _ensure_analysis_workspace_column(connection)
             _ensure_phase22_provider_columns(connection)
             connection.commit()
+
+    def save_contract_sources(self, analysis_id: str, old: bytes, new: bytes) -> None:
+        from apps.api.app.contracts.snapshots import verify_sources
+
+        verify_sources(self.get_analysis(analysis_id), old, new)
+        with self._transaction() as connection:
+            connection.execute(
+                "INSERT OR IGNORE INTO analysis_contract_sources VALUES (?, ?, ?)",
+                (analysis_id, old, new),
+            )
+
+    def get_contract_sources(self, analysis_id: str) -> tuple[bytes, bytes] | None:
+        from apps.api.app.contracts.snapshots import verify_sources
+
+        analysis = self.get_analysis(analysis_id)
+        if analysis is None:
+            return None
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT old_content, new_content FROM analysis_contract_sources "
+                "WHERE analysis_id=?",
+                (analysis_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        result = bytes(row[0]), bytes(row[1])
+        verify_sources(analysis, *result)
+        return result
 
     def create_or_get(self, submission: AnalysisSubmission) -> AnalysisCreation:
         workspace_id = current_workspace_id()

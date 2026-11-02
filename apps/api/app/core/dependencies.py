@@ -14,6 +14,7 @@ from apps.api.app.auth.provider import (
 )
 from apps.api.app.auth.service import AuthService
 from apps.api.app.core.config import settings
+from apps.api.app.core.rate_limit import FirestoreRateLimiter, NoopRateLimiter, RateLimiter
 from apps.api.app.github.automation_provider import (
     GitHubAutomationProvider,
     MockGitHubAutomationProvider,
@@ -33,6 +34,9 @@ from apps.api.app.github.worker import AutomationWorker
 from apps.api.app.github.write_guard import WorkspaceAuthorizedGitHubWriteProvider
 from apps.api.app.infrastructure.firestore_analysis_repository import (
     FirestoreAnalysisRepository,
+)
+from apps.api.app.infrastructure.firestore_automation_repository import (
+    FirestoreAutomationRepository,
 )
 from apps.api.app.infrastructure.firestore_monitor_repository import (
     FirestoreMonitorRepository,
@@ -59,6 +63,7 @@ from apps.api.app.migration.provider import (
 from apps.api.app.migration.service import (
     MigrationRecommendationService,
 )
+from apps.api.app.monitoring.github_file_source import GitHubFileContractSource
 from apps.api.app.monitoring.scheduler import MonitorScheduler
 from apps.api.app.monitoring.service import (
     ApiMonitorService,
@@ -142,6 +147,19 @@ def get_auth_service() -> AuthService:
         frontend_url=settings.frontend_url,
         session_ttl_hours=settings.session_ttl_hours,
         session_secret=settings.session_secret or "local-development-only",
+        allowed_github_logins=settings.beta_allowed_github_logins,
+    )
+
+
+@lru_cache
+def get_rate_limiter() -> RateLimiter:
+    if not settings.rate_limit_enabled:
+        return NoopRateLimiter()
+    if settings.storage_backend != "firestore":
+        raise RuntimeError("Distributed rate limiting requires Firestore storage")
+    return FirestoreRateLimiter(
+        project_id=settings.firestore_project_id or None,
+        database_id=settings.firestore_database_id,
     )
 
 
@@ -168,7 +186,15 @@ def get_github_onboarding_service() -> GitHubOnboardingService:
 
 @lru_cache
 def get_automation_repository() -> AutomationRepository:
-    repository: AutomationRepository = SQLiteAutomationRepository(settings.database_path)
+    if settings.storage_backend == "sqlite":
+        repository: AutomationRepository = SQLiteAutomationRepository(settings.database_path)
+    elif settings.storage_backend == "firestore":
+        repository = FirestoreAutomationRepository(
+            project_id=settings.firestore_project_id or None,
+            database_id=settings.firestore_database_id,
+        )
+    else:
+        raise RuntimeError("DRIFTGUARD_STORAGE_BACKEND must be either 'sqlite' or 'firestore'")
     repository.initialize()
     return repository
 
@@ -410,7 +436,17 @@ def get_pull_request_workflow_service(
 
 
 def get_openapi_specification_source() -> OpenApiSpecificationSource:
-    return OpenApiSpecificationSource()
+    return OpenApiSpecificationSource(
+        remote_urls_enabled=settings.remote_specification_urls_enabled
+    )
+
+
+def get_github_file_contract_source() -> GitHubFileContractSource:
+    return GitHubFileContractSource(
+        get_workspace_repository(),
+        get_github_automation_provider(),
+        get_github_installation_provider(),
+    )
 
 
 def get_api_monitor_service(
@@ -419,8 +455,12 @@ def get_api_monitor_service(
         OpenApiSpecificationSource,
         Depends(get_openapi_specification_source),
     ],
+    github_file_source: Annotated[
+        GitHubFileContractSource,
+        Depends(get_github_file_contract_source),
+    ],
 ) -> ApiMonitorService:
-    return ApiMonitorService(repository, specification_source)
+    return ApiMonitorService(repository, specification_source, github_file_source)
 
 
 def get_monitor_check_service(
@@ -437,12 +477,18 @@ def get_monitor_check_service(
         AnalysisPipelineService,
         Depends(get_analysis_pipeline_service),
     ],
+    github_file_source: Annotated[
+        GitHubFileContractSource,
+        Depends(get_github_file_contract_source),
+    ],
 ) -> MonitorCheckService:
     return MonitorCheckService(
         repository,
         specification_source,
         github_source,
         analysis_pipeline,
+        github_file_source,
+        check_lease_seconds=settings.monitor_check_lease_seconds,
         consumer_dispatcher=ConsumerAutomationDispatcher(
             get_automation_repository(), get_workspace_repository()
         ).dispatch,
@@ -453,13 +499,21 @@ def get_monitor_check_service(
 def get_default_monitor_check_service() -> MonitorCheckService:
     return MonitorCheckService(
         get_default_monitor_repository(),
-        OpenApiSpecificationSource(),
+        OpenApiSpecificationSource(
+            remote_urls_enabled=settings.remote_specification_urls_enabled
+        ),
         GitHubRepositorySource(),
         AnalysisPipelineService(
             get_default_analysis_repository(),
             get_risk_classifier(),
             get_migration_recommendation_service(),
         ),
+        GitHubFileContractSource(
+            get_workspace_repository(),
+            get_github_automation_provider(),
+            get_github_installation_provider(),
+        ),
+        check_lease_seconds=settings.monitor_check_lease_seconds,
         consumer_dispatcher=ConsumerAutomationDispatcher(
             get_automation_repository(), get_workspace_repository()
         ).dispatch,

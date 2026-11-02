@@ -428,7 +428,13 @@ class GitHubAppWriteProvider(GitHubWriteProvider):
             metadata.repository,
             "/pulls",
             expected={201},
-            json_body={"title": title, "body": body, "head": branch, "base": metadata.base_ref},
+            json_body={
+                "title": title,
+                "body": body,
+                "head": branch,
+                "base": metadata.base_ref,
+                "draft": True,
+            },
         )
         return GitHubPullRequestResult(
             number=int(data["number"]),

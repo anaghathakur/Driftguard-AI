@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from dataclasses import replace
 from datetime import datetime
 
 from apps.api.app.core.workspace_context import current_workspace_id
@@ -38,6 +39,29 @@ class ApiMonitorRepository(ABC):
         """Return due monitors paired with their trusted persisted workspace."""
 
         return [(current_workspace_id(), monitor) for monitor in self.list_due(now)]
+
+    def claim_check(
+        self,
+        monitor_id: str,
+        *,
+        now: datetime,
+        lease_expires_at: datetime,
+    ) -> ApiMonitor | None:
+        """Claim a monitor check or return None when another worker owns its lease.
+
+        Concrete durable repositories must override this with an atomic operation.
+        The fallback keeps lightweight in-memory test repositories compatible.
+        """
+
+        monitor = self.get(monitor_id)
+        if monitor is None or (
+            monitor.check_lease_expires_at is not None
+            and monitor.check_lease_expires_at > now
+        ):
+            return None
+        claimed = replace(monitor, check_lease_expires_at=lease_expires_at)
+        self.save(claimed)
+        return claimed
 
     @abstractmethod
     def delete(self, monitor_id: str) -> bool:

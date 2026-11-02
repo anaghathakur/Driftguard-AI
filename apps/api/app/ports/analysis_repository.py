@@ -33,6 +33,14 @@ from apps.api.app.schemas.validation import PatchValidationRun
 
 class AnalysisRepository(ABC):
     @abstractmethod
+    def save_contract_sources(self, analysis_id: str, old: bytes, new: bytes) -> None:
+        """Store bounded GraphQL schemas privately, scoped to the owning analysis."""
+
+    @abstractmethod
+    def get_contract_sources(self, analysis_id: str) -> tuple[bytes, bytes] | None:
+        """Read stored schemas; legacy analyses return None and cannot be certified."""
+
+    @abstractmethod
     def initialize(self) -> None:
         """Initialize database structures."""
 

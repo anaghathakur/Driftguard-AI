@@ -68,7 +68,7 @@ from apps.api.app.schemas.risk import RiskPrediction
 from apps.api.app.schemas.validation import PatchValidationRun
 
 T = TypeVar("T")
-ANALYSIS_PIPELINE_VERSION = "6.0.2"
+ANALYSIS_PIPELINE_VERSION = "7.0.0"
 logger = logging.getLogger("driftguard.analysis")
 
 
@@ -219,6 +219,13 @@ class AnalysisPipelineService:
             "scan_repository",
             lambda: RepositoryArchiveScanner().scan(repository_filename, repository_content),
         )
+        if prepared.contract_type is ContractType.GRAPHQL:
+            pipeline.run(
+                "persist_contract_schemas",
+                lambda: self.repository.save_contract_sources(
+                    creation.analysis.analysis_id, old_content, new_content
+                ),
+            )
         impact_result = pipeline.run(
             "match_api_usage",
             lambda: (

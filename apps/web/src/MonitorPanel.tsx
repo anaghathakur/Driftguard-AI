@@ -14,6 +14,7 @@ import {
   updateMonitor,
   type ApiMonitor,
   type MonitorCheck,
+  type RepositoryConnection,
 } from "./lib/api";
 
 type MonitorPanelProps = {
@@ -21,6 +22,7 @@ type MonitorPanelProps = {
   onMonitorsChanged?: (monitors: ApiMonitor[]) => void;
   canManage: boolean;
   canCheck: boolean;
+  repositories: RepositoryConnection[];
 };
 
 export function MonitorPanel({
@@ -28,6 +30,7 @@ export function MonitorPanel({
   onMonitorsChanged,
   canManage,
   canCheck,
+  repositories,
 }: MonitorPanelProps) {
   const [monitors, setMonitors] = useState<ApiMonitor[]>([]);
   const [checks, setChecks] = useState<Record<string, MonitorCheck[]>>({});
@@ -37,7 +40,10 @@ export function MonitorPanel({
   const [error, setError] = useState<string | null>(null);
   const [form, setForm] = useState({
     name: "",
+    sourceType: "http_url" as "http_url" | "github_file",
     specificationUrl: "",
+    sourcePath: "",
+    repositoryConnectionId: "",
     repositoryUrl: "",
     repositoryRef: "",
     interval: "60",
@@ -65,15 +71,26 @@ export function MonitorPanel({
     try {
       await createMonitor({
         name: form.name,
-        specification_url: form.specificationUrl,
-        repository_url: form.repositoryUrl,
+        source_type: form.sourceType,
+        ...(form.sourceType === "http_url"
+          ? {
+              specification_url: form.specificationUrl,
+              repository_url: form.repositoryUrl || undefined,
+            }
+          : {
+              source_path: form.sourcePath,
+              repository_connection_id: form.repositoryConnectionId,
+            }),
         repository_ref: form.repositoryRef || undefined,
         check_interval_minutes: Number(form.interval),
         enabled: true,
       });
       setForm({
         name: "",
+        sourceType: "http_url",
         specificationUrl: "",
+        sourcePath: "",
+        repositoryConnectionId: "",
         repositoryUrl: "",
         repositoryRef: "",
         interval: "60",
@@ -128,19 +145,25 @@ export function MonitorPanel({
         </p>
         <h3 className="mt-2 text-xl font-semibold text-white">API Monitors</h3>
         <p className="mt-1 text-sm text-slate-400">
-          Remember an OpenAPI baseline and analyze configured GitHub code only when it changes.
+          Store a validated OpenAPI or GraphQL baseline, detect drift, and analyze only when it changes.
         </p>
         {!canManage && <p className="mt-2 text-xs text-amber-200">Your workspace role has read-only monitor configuration access.</p>}
       </div>
 
       <form onSubmit={(event) => void handleCreate(event)} className="mt-6 grid gap-4 rounded-xl border border-white/10 bg-black/20 p-4 md:grid-cols-2">
         <MonitorInput label="Monitor name" value={form.name} placeholder="Stripe Payments API" disabled={isCreating || !canManage} onChange={(value) => setForm({ ...form, name: value })} />
-        <MonitorInput label="OpenAPI URL" value={form.specificationUrl} placeholder="https://example.com/openapi.json" disabled={isCreating || !canManage} onChange={(value) => setForm({ ...form, specificationUrl: value })} />
-        <MonitorInput label="GitHub repository" value={form.repositoryUrl} placeholder="https://github.com/company/payment-service" disabled={isCreating || !canManage} onChange={(value) => setForm({ ...form, repositoryUrl: value })} />
+        <label className="block"><span className="text-sm font-semibold text-slate-200">Contract source</span><select value={form.sourceType} disabled={isCreating || !canManage} onChange={(event) => setForm({ ...form, sourceType: event.target.value as "http_url" | "github_file" })} className="mt-2 w-full rounded-lg border border-white/10 bg-slate-950/80 px-3 py-2.5 text-sm text-slate-100 outline-none focus:border-violet-400/50 disabled:opacity-60"><option value="http_url">Public HTTPS URL</option><option value="github_file">Connected GitHub file</option></select></label>
+        {form.sourceType === "http_url" ? <>
+          <MonitorInput label="Contract URL" value={form.specificationUrl} placeholder="https://example.com/openapi.json or schema.graphql" disabled={isCreating || !canManage} onChange={(value) => setForm({ ...form, specificationUrl: value })} />
+          <MonitorInput label="Repository URL (optional)" value={form.repositoryUrl} placeholder="https://github.com/company/payment-service" disabled={isCreating || !canManage} onChange={(value) => setForm({ ...form, repositoryUrl: value })} />
+        </> : <>
+          <label className="block"><span className="text-sm font-semibold text-slate-200">Connected repository</span><select required value={form.repositoryConnectionId} disabled={isCreating || !canManage || repositories.length === 0} onChange={(event) => setForm({ ...form, repositoryConnectionId: event.target.value })} className="mt-2 w-full rounded-lg border border-white/10 bg-slate-950/80 px-3 py-2.5 text-sm text-slate-100 outline-none focus:border-violet-400/50 disabled:opacity-60"><option value="">{repositories.length ? "Select a connected repository" : "Connect a repository first"}</option>{repositories.filter((repository) => repository.enabled).map((repository) => <option key={repository.id} value={repository.id}>{repository.full_name}</option>)}</select></label>
+          <MonitorInput label="Contract file path" value={form.sourcePath} placeholder="contracts/openapi.yaml or schema.graphql" disabled={isCreating || !canManage} onChange={(value) => setForm({ ...form, sourcePath: value })} />
+        </>}
         <MonitorInput label="Branch, tag, or ref (optional)" value={form.repositoryRef} placeholder="main" disabled={isCreating || !canManage} onChange={(value) => setForm({ ...form, repositoryRef: value })} />
         <MonitorInput label="Check interval (minutes)" value={form.interval} type="number" placeholder="60" disabled={isCreating || !canManage} onChange={(value) => setForm({ ...form, interval: value })} />
         <div className="flex items-end">
-          <button type="submit" disabled={!canManage || isCreating || !form.name || !form.specificationUrl || !form.repositoryUrl} title={!canManage ? "Only owners and admins can create monitors." : undefined} className="w-full rounded-xl bg-gradient-to-r from-violet-400 to-cyan-400 px-5 py-3 text-sm font-semibold text-slate-950 disabled:cursor-not-allowed disabled:opacity-50">
+          <button type="submit" disabled={!canManage || isCreating || !form.name || (form.sourceType === "http_url" ? !form.specificationUrl : !form.sourcePath || !form.repositoryConnectionId)} title={!canManage ? "Only owners and admins can create monitors." : undefined} className="w-full rounded-xl bg-gradient-to-r from-violet-400 to-cyan-400 px-5 py-3 text-sm font-semibold text-slate-950 disabled:cursor-not-allowed disabled:opacity-50">
             {isCreating ? "Establishing baseline..." : "Create monitor"}
           </button>
         </div>
@@ -160,8 +183,8 @@ export function MonitorPanel({
                   <Status status={monitor.last_check_status} />
                   <span className={`rounded-full px-2 py-1 text-xs ${monitor.enabled ? "bg-emerald-400/10 text-emerald-300" : "bg-slate-400/10 text-slate-400"}`}>{monitor.enabled ? "Enabled" : "Disabled"}</span>
                 </div>
-                <p className="mt-2 break-all text-xs text-slate-400">{monitor.specification_url}</p>
-                <p className="mt-1 break-all text-xs text-slate-500">{monitor.repository_url}{monitor.repository_ref ? ` · ${monitor.repository_ref}` : ""}</p>
+                <p className="mt-2 break-all text-xs text-slate-400">{monitor.source_type === "github_file" ? `GitHub file · ${monitor.source_path}` : monitor.specification_url}</p>
+                <p className="mt-1 break-all text-xs text-slate-500">{monitor.repository_url || "No repository impact source"}{monitor.repository_ref ? ` · ${monitor.repository_ref}` : ""}</p>
                 <div className="mt-3 flex flex-wrap gap-4 text-xs text-slate-500">
                   <span>Baseline: <code>{monitor.baseline_sha256.slice(0, 12)}</code></span>
                   <span>Every {monitor.check_interval_minutes} min</span>
@@ -199,7 +222,7 @@ export function MonitorPanel({
 }
 
 function MonitorInput({ label, value, placeholder, type = "text", disabled, onChange }: { label: string; value: string; placeholder: string; type?: string; disabled: boolean; onChange: (value: string) => void }) {
-  return <label className="block"><span className="text-sm font-semibold text-slate-200">{label}</span><input required={label.indexOf("optional") === -1} type={type} min={type === "number" ? 1 : undefined} max={type === "number" ? 10080 : undefined} value={value} placeholder={placeholder} disabled={disabled} onChange={(event) => onChange(event.target.value)} className="mt-2 w-full rounded-lg border border-white/10 bg-slate-950/80 px-3 py-2.5 text-sm text-slate-100 outline-none placeholder:text-slate-600 focus:border-violet-400/50 disabled:opacity-60" /></label>;
+  return <label className="block"><span className="text-sm font-semibold text-slate-200">{label}</span><input required={!label.includes("optional")} type={type} min={type === "number" ? 1 : undefined} max={type === "number" ? 10080 : undefined} value={value} placeholder={placeholder} disabled={disabled} onChange={(event) => onChange(event.target.value)} className="mt-2 w-full rounded-lg border border-white/10 bg-slate-950/80 px-3 py-2.5 text-sm text-slate-100 outline-none placeholder:text-slate-600 focus:border-violet-400/50 disabled:opacity-60" /></label>;
 }
 
 function Action({ children, onClick, disabled, danger = false }: { children: string; onClick: () => void; disabled: boolean; danger?: boolean }) {

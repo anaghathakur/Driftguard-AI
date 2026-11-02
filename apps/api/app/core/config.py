@@ -108,6 +108,16 @@ def _origins(name: str, default: tuple[str, ...]) -> tuple[str, ...]:
     return tuple(origins)
 
 
+def _github_logins(name: str) -> tuple[str, ...]:
+    raw_value = os.getenv(name, "")
+    logins: list[str] = []
+    for value in raw_value.split(","):
+        login = value.strip().casefold()
+        if login and login not in logins:
+            logins.append(login)
+    return tuple(logins)
+
+
 @dataclass(frozen=True, slots=True)
 class Settings:
     deployment_environment: str = os.getenv("DRIFTGUARD_ENVIRONMENT", "development").strip().lower()
@@ -121,6 +131,15 @@ class Settings:
     ).strip()
     session_ttl_hours: int = _positive_int("DRIFTGUARD_SESSION_TTL_HOURS", 24 * 7)
     secure_cookies: bool = _boolean("DRIFTGUARD_SECURE_COOKIES", False)
+    session_cookie_same_site: str = os.getenv(
+        "DRIFTGUARD_SESSION_COOKIE_SAME_SITE",
+        (
+            "none"
+            if os.getenv("DRIFTGUARD_ENVIRONMENT", "development").strip().lower()
+            == "production"
+            else "lax"
+        ),
+    ).strip().lower()
     github_oauth_provider: str = (
         os.getenv("DRIFTGUARD_GITHUB_OAUTH_PROVIDER", "github").strip().lower()
     )
@@ -134,6 +153,9 @@ class Settings:
         os.getenv("DRIFTGUARD_FRONTEND_URL", "http://localhost:5173").strip().rstrip("/")
     )
     github_app_install_url: str = os.getenv("DRIFTGUARD_GITHUB_APP_INSTALL_URL", "").strip()
+    beta_allowed_github_logins: tuple[str, ...] = _github_logins(
+        "DRIFTGUARD_BETA_ALLOWED_GITHUB_LOGINS"
+    )
 
     cors_allowed_origins: tuple[str, ...] = _origins(
         "DRIFTGUARD_CORS_ALLOWED_ORIGINS",
@@ -241,6 +263,14 @@ class Settings:
         "DRIFTGUARD_REMOTE_SPEC_MAX_REDIRECTS",
         3,
     )
+    remote_specification_urls_enabled: bool = _boolean(
+        "DRIFTGUARD_REMOTE_SPECIFICATION_URLS_ENABLED",
+        os.getenv("DRIFTGUARD_ENVIRONMENT", "development").strip().lower() != "production",
+    )
+    rate_limit_enabled: bool = _boolean(
+        "DRIFTGUARD_RATE_LIMIT_ENABLED",
+        os.getenv("DRIFTGUARD_ENVIRONMENT", "development").strip().lower() == "production",
+    )
 
     monitor_scheduler_enabled: bool = _boolean(
         "DRIFTGUARD_MONITOR_SCHEDULER_ENABLED",
@@ -250,6 +280,10 @@ class Settings:
     monitor_poll_seconds: float = _positive_float(
         "DRIFTGUARD_MONITOR_POLL_SECONDS",
         30.0,
+    )
+    monitor_check_lease_seconds: int = _positive_int(
+        "DRIFTGUARD_MONITOR_CHECK_LEASE_SECONDS",
+        15 * 60,
     )
 
     ai_max_retries: int = _non_negative_int(
@@ -464,6 +498,10 @@ def validate_security_settings(value: Settings) -> None:
         raise RuntimeError("DRIFTGUARD_AUTH_MODE must be 'local' or 'github'")
     if value.github_oauth_provider not in {"github", "mock"}:
         raise RuntimeError("DRIFTGUARD_GITHUB_OAUTH_PROVIDER must be 'github' or 'mock'")
+    if value.session_cookie_same_site not in {"lax", "strict", "none"}:
+        raise RuntimeError(
+            "DRIFTGUARD_SESSION_COOKIE_SAME_SITE must be 'lax', 'strict', or 'none'"
+        )
     if value.deployment_environment != "production":
         return
     problems: list[str] = []
@@ -483,12 +521,38 @@ def validate_security_settings(value: Settings) -> None:
         problems.append("production prohibits the mock GitHub Check provider")
     if value.validation_execution_provider == "local":
         problems.append("production prohibits the process-local validation runner")
+    if value.storage_backend != "firestore":
+        problems.append("production requires DRIFTGUARD_STORAGE_BACKEND=firestore")
+    if value.monitor_scheduler_enabled:
+        problems.append("production prohibits the process-local monitor scheduler")
+    if value.automation_worker_enabled:
+        problems.append("production prohibits the process-local automation worker")
+    if value.remote_specification_urls_enabled:
+        problems.append(
+            "production requires DRIFTGUARD_REMOTE_SPECIFICATION_URLS_ENABLED=false "
+            "until DNS-pinned fetching is deployed"
+        )
+    if not value.beta_allowed_github_logins:
+        problems.append(
+            "production requires DRIFTGUARD_BETA_ALLOWED_GITHUB_LOGINS for controlled beta access"
+        )
+    if not value.rate_limit_enabled:
+        problems.append("production requires DRIFTGUARD_RATE_LIMIT_ENABLED=true")
     if len(value.session_secret) < 32:
         problems.append("DRIFTGUARD_SESSION_SECRET must contain at least 32 characters")
     if not value.secure_cookies:
         problems.append("production requires DRIFTGUARD_SECURE_COOKIES=true")
+    if value.session_cookie_same_site != "none":
+        problems.append(
+            "production requires DRIFTGUARD_SESSION_COOKIE_SAME_SITE=none "
+            "for separate frontend and API HTTPS origins"
+        )
     if not value.github_oauth_client_id or not value.github_oauth_client_secret:
         problems.append("production GitHub OAuth credentials are required")
+    if not value.github_webhook_secret:
+        problems.append("production GitHub webhook secret is required")
+    if not value.github_app_id or not value.github_app_private_key_path:
+        problems.append("production GitHub App credentials are required")
     callback = urlsplit(value.github_oauth_callback_url)
     if callback.scheme != "https" or not callback.netloc:
         problems.append("production OAuth callback URL must use HTTPS")

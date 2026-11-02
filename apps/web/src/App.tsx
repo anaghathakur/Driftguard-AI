@@ -805,6 +805,7 @@ async function handleCreateWorkspace() {
           onMonitorsChanged={setMonitors}
           canManage={canManageWorkspaceResources}
           canCheck={canRunAnalyses}
+          repositories={connectedRepositories}
         />}
 
         {activePage === "analyses" && <AnalysesPage

@@ -247,13 +247,18 @@ Repository code is never imported, compiled, executed, tested, or passed to pack
 
 ## Automatic API Monitoring
 
-DriftGuard can monitor a remote OpenAPI document for contract drift.
+DriftGuard can subscribe to a remote HTTPS contract or a contract file in a
+workspace-authorized GitHub App repository. Supported contract formats are OpenAPI
+JSON/YAML and GraphQL SDL. Manual file comparison remains a separate first-class
+workflow.
 
 A monitor stores:
 
 - monitor name
-- remote OpenAPI URL
-- GitHub repository
+- source type (public HTTPS URL or connected GitHub file)
+- remote contract URL or a repository-relative contract path
+- optional consumer repository (a contract-only subscription produces comparison,
+  risk, and migration guidance but does not claim source impact or generate a patch)
 - optional branch/tag/ref
 - check interval
 - current specification baseline
@@ -274,7 +279,7 @@ Future check
 Compare SHA-256
       ↓
 Unchanged → record check only
-Changed   → run impact-analysis pipeline
+Changed   → persist a comparison, then run repository impact analysis when a repository is configured
 Failed    → retain previous baseline for retry
 ```
 
@@ -282,7 +287,7 @@ A successful changed check advances the stored baseline only after the analysis 
 
 ---
 
-## Remote OpenAPI Security
+## Remote Contract Security
 
 Remote specifications are fetched through a bounded HTTPS-only acquisition layer.
 
@@ -299,7 +304,12 @@ DriftGuard rejects URLs containing or resolving to unsafe destinations such as:
 
 Redirects are validated individually.
 
-Remote content is bounded by configured size and timeout limits before being passed into the OpenAPI validator.
+Remote content is bounded by configured size and timeout limits before being passed
+into the OpenAPI or GraphQL validator. Downloaded contracts are never executed.
+
+GitHub-file subscriptions accept only a server-resolved connected repository and a
+path confined to that repository. DriftGuard obtains a short-lived GitHub App
+installation token server-side; the browser never supplies a personal access token.
 
 DNS validation occurs before each request. Network-level egress restrictions are still recommended for stronger production isolation against DNS-rebinding scenarios.
 
@@ -324,6 +334,7 @@ Enable it with:
 ```text
 DRIFTGUARD_MONITOR_SCHEDULER_ENABLED=true
 DRIFTGUARD_MONITOR_POLL_SECONDS=30
+DRIFTGUARD_MONITOR_CHECK_LEASE_SECONDS=900
 ```
 
 The current scheduler is process-local.
@@ -1604,7 +1615,10 @@ DriftGuard AI is a secure-conscious MVP focused on static API migration intellig
   disposable copy. Production requires an external sandbox; with execution disabled, the API
   reports `DEGRADED` and clearly states that repository tests were not executed.
 
-- **Monitoring:** Remote URL monitoring remains OpenAPI-only in this release. GitHub-hosted GraphQL contracts participate in discovery and immutable PR checks, while arbitrary GraphQL introspection and remote SDL monitoring are deliberately deferred. The built-in scheduler is process-local and intended for a single-worker MVP.
+- **Monitoring:** Remote HTTPS monitoring supports static OpenAPI and GraphQL SDL
+  documents, and connected GitHub-file subscriptions support the same formats.
+  Arbitrary GraphQL introspection is deliberately not implemented. The built-in
+  scheduler is process-local and intended for a single-worker MVP.
 
 - **ML risk scoring:** The current risk model is trained and evaluated on deterministic synthetic data. Scores should be used to prioritize engineering review, not as autonomous approval or deployment decisions.
 

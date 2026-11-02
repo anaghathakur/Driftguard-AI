@@ -31,14 +31,32 @@ def fetch(
     resolver=public_resolver,
     max_bytes: int = 1024 * 1024,
     max_redirects: int = 3,
+    remote_urls_enabled: bool = True,
 ):
     source = OpenApiSpecificationSource(
         transport=httpx.MockTransport(handler),
         resolver=resolver,
         max_bytes=max_bytes,
         max_redirects=max_redirects,
+        remote_urls_enabled=remote_urls_enabled,
     )
     return asyncio.run(source.fetch(url))
+
+
+def test_fetch_fails_closed_when_remote_contract_urls_are_disabled() -> None:
+    calls = 0
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(200, content=specification())
+
+    with pytest.raises(DriftGuardError) as error:
+        fetch(handler, remote_urls_enabled=False)
+
+    assert error.value.code == "remote_specification_urls_disabled"
+    assert error.value.status_code == 503
+    assert calls == 0
 
 
 def test_fetch_accepts_valid_public_https_openapi():
@@ -47,6 +65,20 @@ def test_fetch_accepts_valid_public_https_openapi():
     assert result.filename == "openapi.json"
     assert result.content == specification()
     assert len(result.sha256) == 64
+
+
+def test_fetch_accepts_valid_public_https_graphql_sdl():
+    result = fetch(
+        lambda _request: httpx.Response(
+            200,
+            headers={"content-type": "application/graphql"},
+            content=b"type Query { health: String! }",
+        ),
+        "https://api.example.com/schema.graphql",
+    )
+
+    assert result.filename == "schema.graphql"
+    assert result.contract_type.value == "graphql"
 
 
 @pytest.mark.parametrize(

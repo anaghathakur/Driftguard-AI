@@ -36,6 +36,7 @@ class AuthService:
         frontend_url: str,
         session_ttl_hours: int,
         session_secret: str,
+        allowed_github_logins: tuple[str, ...] = (),
     ) -> None:
         self.repository = repository
         self.provider = provider
@@ -43,6 +44,9 @@ class AuthService:
         self.frontend_url = frontend_url.rstrip("/")
         self.session_ttl_hours = session_ttl_hours
         self.session_secret = session_secret.encode()
+        self.allowed_github_logins = frozenset(
+            login.casefold() for login in allowed_github_logins
+        )
 
     def begin(
         self,
@@ -74,6 +78,7 @@ class AuthService:
     async def callback(self, code: str, state: str) -> tuple[str, str, str]:
         stored = self.consume_state(state)
         identity = await self.provider.resolve_identity(code, self.callback_url)
+        self._require_allowed_github_login(identity.login)
         now = _now()
         subject = str(identity.github_user_id)
         existing = self.repository.get_user_by_external_identity("github", subject)
@@ -130,6 +135,7 @@ class AuthService:
         user = self.repository.get_user(session.user_id)
         if user is None:
             raise _auth_required()
+        self._require_allowed_github_login(user.github_login)
         workspace = None
         if session.active_workspace_id:
             if self.repository.get_membership(user.user_id, session.active_workspace_id) is None:
@@ -233,6 +239,14 @@ class AuthService:
                 {"creation_mode": "automatic_personal"},
             )
         return persisted_membership, persisted_workspace, created
+
+    def _require_allowed_github_login(self, login: str) -> None:
+        if self.allowed_github_logins and login.casefold() not in self.allowed_github_logins:
+            raise DriftGuardError(
+                code="beta_access_denied",
+                message="This GitHub account is not approved for the controlled beta.",
+                status_code=403,
+            )
 
     def switch_workspace(self, session: AuthSession, user: User, workspace_id: str) -> Workspace:
         if self.repository.get_membership(user.user_id, workspace_id) is None:

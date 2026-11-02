@@ -10,7 +10,10 @@ from typing import Any
 
 from pydantic import ValidationError
 
-from apps.api.app.graphql.patch import graphql_argument_rename_edits
+from apps.api.app.graphql.patch import (
+    graphql_argument_removal_edits,
+    graphql_argument_rename_edits,
+)
 from apps.api.app.migration.provider import MigrationProviderError
 from apps.api.app.patches.context import PatchGenerationContext, PatchPrompt
 from apps.api.app.schemas.comparison import ChangeType, ContractType
@@ -95,6 +98,8 @@ class DeterministicPatchGenerationProvider(PatchGenerationProvider):
         )
         direct_paths = {match.file_path for match in context.matches if match.impact_depth == 0}
         files: list[StructuredPatchFile] = []
+        warnings = ["This proposed patch is static and has not been executed or tested."]
+        unresolved_graphql_requirement = False
         for source in sorted(context.source_files, key=lambda item: item.path):
             if source.path not in direct_paths:
                 continue
@@ -124,20 +129,38 @@ class DeterministicPatchGenerationProvider(PatchGenerationProvider):
                     )
             elif removed:
                 change = removed[0]
-                edits = _remove_field_edits(
-                    source.content,
-                    language,
-                    change.subject or "",
-                    [change.change_id],
-                )
+                if change.contract_type is ContractType.GRAPHQL:
+                    edits = graphql_argument_removal_edits(
+                        source.content,
+                        change.subject or "",
+                        [change.change_id],
+                    )
+                    unresolved_graphql_requirement = any(
+                        item.contract_type is ContractType.GRAPHQL
+                        and item.operation_identifier == change.operation_identifier
+                        for item in required
+                    )
+                else:
+                    edits = _remove_field_edits(
+                        source.content,
+                        language,
+                        change.subject or "",
+                        [change.change_id],
+                    )
             elif required:
                 change = required[0]
-                edits = _add_field_edits(
-                    source.content,
-                    language,
-                    change.subject or "",
-                    [change.change_id],
-                )
+                if change.contract_type is ContractType.GRAPHQL:
+                    # A required GraphQL value is semantic application data. Without
+                    # replacement evidence, generating a variable would only make a
+                    # cosmetic patch that cannot be correct.
+                    unresolved_graphql_requirement = True
+                else:
+                    edits = _add_field_edits(
+                        source.content,
+                        language,
+                        change.subject or "",
+                        [change.change_id],
+                    )
             if edits:
                 symbol = next(
                     (
@@ -158,10 +181,15 @@ class DeterministicPatchGenerationProvider(PatchGenerationProvider):
                 break
         if not files:
             raise PatchProviderError("No conservative request-field patch pattern was applicable.")
+        if unresolved_graphql_requirement:
+            warnings.append(
+                "A new required GraphQL value has no proven application-value mapping; "
+                "manual review is required."
+            )
         return GeneratedPatchContent(
             summary="Update the direct API client for the changed request fields.",
             files=files,
-            warnings=["This proposed patch is static and has not been executed or tested."],
+            warnings=warnings,
         )
 
 
@@ -326,13 +354,15 @@ def _matching_pair(
                 if old.contract_type is ContractType.GRAPHQL
                 else old.path == new.path and old.method == new.method
             )
-            one_to_one_candidate = (
-                len(removed) == 1
+            # Legacy OpenAPI field migration keeps its established deterministic
+            # one-to-one behavior. GraphQL values are often semantic identifiers,
+            # so GraphQL replacements always require explicit evidence.
+            one_to_one_openapi = (
+                old.contract_type is not ContractType.GRAPHQL
+                and len(removed) == 1
                 and len(required) == 1
             )
-            if same_operation and (
-                _replacement_evidence(old, new, source) or one_to_one_candidate
-            ):
+            if same_operation and (_replacement_evidence(old, new, source) or one_to_one_openapi):
                 return old, new
     return None
 

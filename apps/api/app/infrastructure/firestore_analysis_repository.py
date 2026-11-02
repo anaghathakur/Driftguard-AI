@@ -79,6 +79,51 @@ class FirestoreAnalysisRepository(AnalysisRepository):
     def initialize(self) -> None:
         """Firestore is schemaless, so no database bootstrap is required."""
 
+    def save_contract_sources(self, analysis_id: str, old: bytes, new: bytes) -> None:
+        import base64
+
+        from apps.api.app.contracts.snapshots import verify_sources
+
+        verify_sources(self.get_analysis(analysis_id), old, new)
+        collection = self._analyses.document(analysis_id).collection("contract_sources")
+        writes = []
+        for name, content in (("old", old), ("new", new)):
+            chunks = [content[start:start + 200_000] for start in range(0, len(content), 200_000)]
+            for index, chunk in enumerate(chunks):
+                writes.append((collection.document(f"{name}-{index}"), {
+                    "data": base64.b64encode(chunk).decode("ascii")
+                }))
+            writes.append((collection.document(name), {"chunks": len(chunks)}))
+        self._commit_sets(writes)
+
+    def get_contract_sources(self, analysis_id: str) -> tuple[bytes, bytes] | None:
+        import base64
+
+        from apps.api.app.contracts.snapshots import verify_sources
+        from apps.api.app.core.config import settings
+
+        analysis = self.get_analysis(analysis_id)
+        if analysis is None:
+            return None
+        collection = self._analyses.document(analysis_id).collection("contract_sources")
+        contents = []
+        for name in ("old", "new"):
+            manifest = collection.document(name).get()
+            if not manifest.exists:
+                return None
+            count = int((manifest.to_dict() or {}).get("chunks", 0))
+            if not 0 < count <= (settings.max_graphql_document_bytes // 200_000) + 1:
+                return None
+            chunks = []
+            for index in range(count):
+                data = (collection.document(f"{name}-{index}").get().to_dict() or {}).get("data")
+                if not isinstance(data, str) or len(data) > 270_000:
+                    return None
+                chunks.append(base64.b64decode(data, validate=True))
+            contents.append(b"".join(chunks))
+        verify_sources(analysis, *contents)
+        return contents[0], contents[1]
+
     def create_or_get(self, submission: AnalysisSubmission) -> AnalysisCreation:
         transaction = self.client.transaction()
 

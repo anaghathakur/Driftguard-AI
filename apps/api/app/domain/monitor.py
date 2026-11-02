@@ -6,12 +6,21 @@ from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
 
+from apps.api.app.schemas.comparison import ContractType
+
 
 class MonitorCheckStatus(StrEnum):
     CHECKING = "checking"
     UNCHANGED = "unchanged"
     CHANGED = "changed"
     FAILED = "failed"
+
+
+class ContractSourceType(StrEnum):
+    """Durable, supported contract source kinds for a subscription."""
+
+    HTTP_URL = "http_url"
+    GITHUB_FILE = "github_file"
 
 
 @dataclass(frozen=True, slots=True)
@@ -35,6 +44,11 @@ class ApiMonitor:
     last_check_status: MonitorCheckStatus | None = None
     last_error_code: str | None = None
     last_error_message: str | None = None
+    source_type: ContractSourceType = ContractSourceType.HTTP_URL
+    source_path: str | None = None
+    repository_connection_id: str | None = None
+    contract_type: ContractType | None = None
+    check_lease_expires_at: datetime | None = None
 
 
 @dataclass(frozen=True, slots=True)

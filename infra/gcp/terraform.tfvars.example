@@ -1,0 +1,15 @@
+# Copy outside the repository as terraform.tfvars. Do not put any secret here.
+project_id               = "your-gcp-project-id"
+region                   = "asia-south1"
+environment              = "production"
+api_image                = "asia-south1-docker.pkg.dev/your-gcp-project-id/driftguard/api@sha256:replace-me"
+web_image                = "asia-south1-docker.pkg.dev/your-gcp-project-id/driftguard/web@sha256:replace-me"
+frontend_url             = "https://app.example.com"
+github_oauth_callback_url = "https://api.example.com/api/v1/auth/github/callback"
+github_app_install_url   = "https://github.com/apps/your-app/installations/new"
+cors_allowed_origins     = "https://app.example.com"
+firestore_database_id    = "driftguard-db"
+# Initial import must retain the existing database's disabled protection setting.
+enable_firestore_deletion_protection = false
+# Controlled beta access policy, not a secret.
+beta_allowed_github_logins = "replace-with-approved-github-login"

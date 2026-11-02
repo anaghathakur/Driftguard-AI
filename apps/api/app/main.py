@@ -46,11 +46,14 @@ from apps.api.app.core.dependencies import (
     get_default_analysis_repository,
     get_default_monitor_repository,
     get_monitor_scheduler,
+    get_rate_limiter,
     get_workspace_repository,
 )
 from apps.api.app.core.exceptions import (
     register_exception_handlers,
 )
+from apps.api.app.core.rate_limit import DistributedRateLimitMiddleware
+from apps.api.app.core.security_headers import SecurityHeadersMiddleware
 
 logger = logging.getLogger("driftguard.lifecycle")
 
@@ -64,7 +67,7 @@ OPENAPI_TAGS = [
     {"name": "analyses", "description": "Persisted analyses, insights, and reports."},
     {"name": "risk", "description": "Risk-model provenance and status."},
     {"name": "migration", "description": "Migration-provider status."},
-    {"name": "monitors", "description": "Process-local API contract monitoring."},
+    {"name": "monitors", "description": "API contract monitoring and managed job execution."},
     {"name": "patches", "description": "Review-only proposed code patches."},
     {"name": "patch validations", "description": "Static validation and test intelligence."},
     {"name": "pull requests", "description": "Explicit, validated GitHub PR workflow."},
@@ -116,6 +119,14 @@ def create_app() -> FastAPI:
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
+    )
+    app.add_middleware(
+        SecurityHeadersMiddleware,
+        production=settings.deployment_environment == "production",
+    )
+    app.add_middleware(
+        DistributedRateLimitMiddleware,
+        limiter=get_rate_limiter(),
     )
 
     app.add_middleware(

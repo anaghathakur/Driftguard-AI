@@ -19,6 +19,7 @@ from apps.api.app.infrastructure.firestore_analysis_repository import (
 from apps.api.app.main import app
 from apps.api.app.pull_requests.provider import (
     GitHubAppWriteProvider,
+    GitHubRepositoryMetadata,
     MockGitHubWriteProvider,
 )
 from apps.api.app.repository.github_source import GitHubRepositoryArchive
@@ -390,6 +391,39 @@ def test_existing_correct_branch_is_reconciled_without_force_or_duplicate_branch
 class StubSigningProvider(GitHubAppWriteProvider):
     def _app_jwt(self) -> str:
         return "test-jwt"
+
+
+def test_github_app_create_pull_request_is_explicitly_draft():
+    captured: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.update(json.loads(request.content))
+        return httpx.Response(
+            201,
+            json={
+                "number": 7,
+                "html_url": "https://github.com/owner/demo/pull/7",
+                "head": {"sha": "b" * 40},
+            },
+        )
+
+    provider = StubSigningProvider(
+        app_id="1",
+        private_key_path="unused",
+        timeout_seconds=1,
+        transport=httpx.MockTransport(handler),
+    )
+    provider._tokens[("owner", "demo")] = "installation-token"
+    result = asyncio.run(
+        provider.create_pull_request(
+            GitHubRepositoryMetadata("owner", "demo", "main", "main", BASE_SHA, 1),
+            branch="driftguard/analysis-patch",
+            title="DriftGuard proposal",
+            body="Review before merging.",
+        )
+    )
+    assert result.number == 7
+    assert captured["draft"] is True
 
 
 @pytest.mark.parametrize(

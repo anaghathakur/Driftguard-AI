@@ -5,6 +5,7 @@ from __future__ import annotations
 import sqlite3
 from collections.abc import Iterator
 from contextlib import contextmanager
+from dataclasses import replace
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -12,8 +13,14 @@ from apps.api.app.core.workspace_context import (
     LOCAL_WORKSPACE_ID,
     current_workspace_id,
 )
-from apps.api.app.domain.monitor import ApiMonitor, MonitorCheckRecord, MonitorCheckStatus
+from apps.api.app.domain.monitor import (
+    ApiMonitor,
+    ContractSourceType,
+    MonitorCheckRecord,
+    MonitorCheckStatus,
+)
 from apps.api.app.ports.monitor_repository import ApiMonitorRepository
+from apps.api.app.schemas.comparison import ContractType
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS api_monitors (
@@ -40,6 +47,11 @@ CREATE TABLE IF NOT EXISTS api_monitors (
     ),
     last_error_code TEXT,
     last_error_message TEXT,
+    source_type TEXT NOT NULL DEFAULT 'http_url' CHECK (source_type IN ('http_url', 'github_file')),
+    source_path TEXT,
+    repository_connection_id TEXT,
+    contract_type TEXT CHECK (contract_type IS NULL OR contract_type IN ('openapi', 'graphql')),
+    check_lease_expires_at TEXT,
     FOREIGN KEY (last_successful_analysis_id)
         REFERENCES analyses(analysis_id) ON DELETE SET NULL
 );
@@ -76,6 +88,8 @@ class SQLiteMonitorRepository(ApiMonitorRepository):
         with self._connect() as connection:
             connection.executescript(SCHEMA)
             _ensure_workspace_column(connection)
+            _ensure_subscription_columns(connection)
+            _ensure_check_lease_column(connection)
 
     def create(self, monitor: ApiMonitor) -> None:
         with self._transaction() as connection:
@@ -128,6 +142,30 @@ class SQLiteMonitorRepository(ApiMonitorRepository):
             ) <= now:
                 result.append((str(row["workspace_id"]), monitor))
         return result
+
+    def claim_check(
+        self,
+        monitor_id: str,
+        *,
+        now: datetime,
+        lease_expires_at: datetime,
+    ) -> ApiMonitor | None:
+        with self._transaction() as connection:
+            row = connection.execute(
+                "SELECT * FROM api_monitors WHERE monitor_id = ? AND workspace_id = ?",
+                (monitor_id, current_workspace_id()),
+            ).fetchone()
+            if row is None:
+                return None
+            monitor = _monitor(row)
+            if (
+                monitor.check_lease_expires_at is not None
+                and monitor.check_lease_expires_at > now
+            ):
+                return None
+            claimed = replace(monitor, check_lease_expires_at=lease_expires_at)
+            self._update_monitor(connection, claimed)
+            return claimed
 
     def delete(self, monitor_id: str) -> bool:
         with self._transaction() as connection:
@@ -242,6 +280,11 @@ _MONITOR_COLUMN_NAMES = (
     "last_check_status",
     "last_error_code",
     "last_error_message",
+    "source_type",
+    "source_path",
+    "repository_connection_id",
+    "contract_type",
+    "check_lease_expires_at",
 )
 _MONITOR_COLUMNS = ", ".join(_MONITOR_COLUMN_NAMES)
 _MONITOR_MARKERS = ", ".join("?" for _ in _MONITOR_COLUMN_NAMES)
@@ -268,6 +311,11 @@ def _monitor_values(monitor: ApiMonitor) -> tuple[object, ...]:
         monitor.last_check_status.value if monitor.last_check_status else None,
         monitor.last_error_code,
         monitor.last_error_message,
+        monitor.source_type.value,
+        monitor.source_path,
+        monitor.repository_connection_id,
+        monitor.contract_type.value if monitor.contract_type else None,
+        _iso(monitor.check_lease_expires_at),
     )
 
 
@@ -310,6 +358,11 @@ def _monitor(row: sqlite3.Row) -> ApiMonitor:
         ),
         last_error_code=row["last_error_code"],
         last_error_message=row["last_error_message"],
+        source_type=ContractSourceType(row["source_type"] or ContractSourceType.HTTP_URL),
+        source_path=row["source_path"],
+        repository_connection_id=row["repository_connection_id"],
+        contract_type=ContractType(row["contract_type"]) if row["contract_type"] else None,
+        check_lease_expires_at=_optional_datetime(row["check_lease_expires_at"]),
     )
 
 
@@ -356,3 +409,22 @@ def _ensure_workspace_column(connection: sqlite3.Connection) -> None:
         "CREATE INDEX IF NOT EXISTS idx_api_monitors_workspace "
         "ON api_monitors(workspace_id, created_at DESC)"
     )
+
+
+def _ensure_subscription_columns(connection: sqlite3.Connection) -> None:
+    columns = {row[1] for row in connection.execute("PRAGMA table_info(api_monitors)")}
+    additions = {
+        "source_type": "TEXT NOT NULL DEFAULT 'http_url'",
+        "source_path": "TEXT",
+        "repository_connection_id": "TEXT",
+        "contract_type": "TEXT",
+    }
+    for name, declaration in additions.items():
+        if name not in columns:
+            connection.execute(f"ALTER TABLE api_monitors ADD COLUMN {name} {declaration}")
+
+
+def _ensure_check_lease_column(connection: sqlite3.Connection) -> None:
+    columns = {row[1] for row in connection.execute("PRAGMA table_info(api_monitors)")}
+    if "check_lease_expires_at" not in columns:
+        connection.execute("ALTER TABLE api_monitors ADD COLUMN check_lease_expires_at TEXT")

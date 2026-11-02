@@ -17,3 +17,11 @@ data/
 node_modules/
 *.pem
 *.key
+
+# Terraform local state and plan artifacts. Remote state must be configured
+# outside this repository before production applies.
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+tools/

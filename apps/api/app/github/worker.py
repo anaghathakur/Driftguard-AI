@@ -86,6 +86,23 @@ class AutomationWorker:
 
     async def run_once(self, *, now: datetime | None = None) -> int:
         claimed_at = now or datetime.now(UTC)
+        recovered = self.automation.recover_stale_jobs(
+            claimed_at,
+            retry_limit=self.max_retries,
+            stale_after_seconds=max(60.0, self.poll_seconds * 3),
+        )
+        for job in recovered:
+            if job.status is BackgroundJobStatus.FAILED:
+                await self._fail_check(
+                    job,
+                    DriftGuardError(
+                        code="worker_interrupted",
+                        message=job.failure_message_safe or "The background job was interrupted.",
+                        status_code=500,
+                    ),
+                )
+        if recovered:
+            logger.warning("recovered_stale_jobs count=%s", len(recovered))
         jobs = self.automation.claim_due_jobs(claimed_at)
         for job in jobs:
             await self._process(job, claimed_at)

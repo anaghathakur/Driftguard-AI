@@ -31,7 +31,10 @@ from apps.api.app.schemas.patch import (
     PatchStatus,
 )
 
-PATCH_PROFILE_VERSION = "1.1.0"
+# GraphQL edits are now evidence-gated and include variable cleanup. Keep proposal
+# idempotency scoped to that behavior so a legacy incomplete proposal is never
+# returned for a newly generated request.
+PATCH_PROFILE_VERSION = "2.0.0"
 
 
 class PatchProposalService:

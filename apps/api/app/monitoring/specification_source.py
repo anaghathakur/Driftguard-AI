@@ -1,4 +1,4 @@
-"""Securely fetch bounded OpenAPI documents from public HTTPS endpoints."""
+"""Securely fetch bounded supported API contracts from public HTTPS endpoints."""
 
 from __future__ import annotations
 
@@ -13,10 +13,12 @@ from urllib.parse import urljoin, urlparse
 
 import httpx
 
+from apps.api.app.contracts.registry import default_contract_registry
 from apps.api.app.core.config import settings
 from apps.api.app.core.exceptions import DriftGuardError
-from apps.api.app.openapi.normalizer import normalize_openapi
-from apps.api.app.openapi.parser import SUPPORTED_EXTENSIONS, parse_openapi_document
+from apps.api.app.graphql.parser import GRAPHQL_EXTENSIONS
+from apps.api.app.openapi.parser import SUPPORTED_EXTENSIONS
+from apps.api.app.schemas.comparison import ContractType
 
 _REDIRECT_STATUSES = frozenset({301, 302, 303, 307, 308})
 _BLOCKED_HOSTNAMES = frozenset(
@@ -37,6 +39,7 @@ class RemoteSpecification:
     content_type: str
     content: bytes
     sha256: str
+    contract_type: ContractType = ContractType.OPENAPI
 
 
 class OpenApiSpecificationSource:
@@ -46,16 +49,27 @@ class OpenApiSpecificationSource:
         timeout_seconds: float = settings.remote_spec_timeout_seconds,
         max_bytes: int = settings.max_spec_file_bytes,
         max_redirects: int = settings.remote_spec_max_redirects,
+        remote_urls_enabled: bool = settings.remote_specification_urls_enabled,
         resolver: AddressResolver | None = None,
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         self.timeout_seconds = timeout_seconds
         self.max_bytes = max_bytes
         self.max_redirects = max_redirects
+        self.remote_urls_enabled = remote_urls_enabled
         self.resolver = resolver or _resolve_public_addresses
         self.transport = transport
 
     async def fetch(self, specification_url: str) -> RemoteSpecification:
+        if not self.remote_urls_enabled:
+            raise DriftGuardError(
+                code="remote_specification_urls_disabled",
+                message=(
+                    "Remote contract URLs are disabled in this environment. "
+                    "Upload a contract or use an authorized GitHub contract file instead."
+                ),
+                status_code=503,
+            )
         current_url = specification_url.strip()
         headers = {
             "Accept": "application/json, application/yaml, text/yaml, */*;q=0.1",
@@ -109,14 +123,18 @@ class OpenApiSpecificationSource:
                             content_type,
                             content,
                         )
-                        document = parse_openapi_document(filename, content)
-                        normalize_openapi(document)
+                        adapter = default_contract_registry.resolve(filename, content)
+                        # Parse at subscription creation/check time. Downloaded
+                        # content is never executed and invalid contracts never
+                        # become a baseline.
+                        adapter.parse(filename, content)
                         return RemoteSpecification(
                             source_url=current_url,
                             filename=filename,
                             content_type=content_type[:200],
                             content=content,
                             sha256=hashlib.sha256(content).hexdigest(),
+                            contract_type=adapter.contract_type,
                         )
         except httpx.TimeoutException as exc:
             raise DriftGuardError(
@@ -250,9 +268,13 @@ def _is_public_address(address: ipaddress.IPv4Address | ipaddress.IPv6Address) -
 
 def _specification_filename(url: str, content_type: str, content: bytes) -> str:
     path_name = PurePosixPath(urlparse(url).path).name
-    if PurePosixPath(path_name).suffix.lower() in SUPPORTED_EXTENSIONS:
+    if PurePosixPath(path_name).suffix.lower() in (
+        SUPPORTED_EXTENSIONS | frozenset(GRAPHQL_EXTENSIONS)
+    ):
         return path_name[:255]
     lowered_type = content_type.lower()
+    if "graphql" in lowered_type:
+        return "contract.graphql"
     if "yaml" in lowered_type or not content.lstrip().startswith((b"{", b"[")):
         return "openapi.yaml"
     return "openapi.json"

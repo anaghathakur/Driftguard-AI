@@ -12,6 +12,7 @@ from apps.api.app.auth.authorization import Permission, authorize
 from apps.api.app.core.config import settings
 from apps.api.app.core.exceptions import DriftGuardError
 from apps.api.app.domain.analysis import RepositorySourceType
+from apps.api.app.graphql.parser import parse_graphql_schema
 from apps.api.app.graphql.validation import validate_graphql_contract
 from apps.api.app.patches.validator import validate_patch
 from apps.api.app.ports.analysis_repository import AnalysisRepository
@@ -21,9 +22,12 @@ from apps.api.app.repository.scanner import RepositoryArchiveScanner
 from apps.api.app.schemas.analysis import PersistedMatchResponse
 from apps.api.app.schemas.patch import GeneratedPatchContent
 from apps.api.app.schemas.validation import (
+    FindingCategory,
+    FindingSeverity,
     FindingStatus,
     PatchValidationListItem,
     PatchValidationRun,
+    ValidationFinding,
     ValidationReadiness,
 )
 from apps.api.app.validation.engine import (
@@ -42,7 +46,9 @@ from apps.api.app.validation.provider import (
     TestPlanProviderError,
 )
 
-VALIDATION_PROFILE_VERSION = "2.0.0"
+# Full GraphQL schema validation is part of this profile. A validation computed
+# before contract snapshots/schema checks must not be reused as current evidence.
+VALIDATION_PROFILE_VERSION = "3.0.0"
 
 
 class PatchValidationService:
@@ -119,7 +125,7 @@ class PatchValidationService:
         patched_graph = analyzer.analyze(patched)
 
         contract_findings = (
-            validate_graphql_contract(changes, patched)
+            self._validate_graphql_contract(analysis, changes, patched)
             if any(change.contract_type.value == "graphql" for change in changes)
             else validate_contract(changes, patched_graph, patched)
         )
@@ -290,6 +296,31 @@ class PatchValidationService:
                 message="The requested patch proposal does not exist.",
                 status_code=404,
             )
+
+    def _validate_graphql_contract(self, analysis, changes, patched):
+        """Validate patched consumer operations against the saved new SDL.
+
+        Legacy GraphQL analyses predate private schema snapshots. They remain
+        reviewable, but lack the evidence required to certify a patch as ready.
+        """
+
+        sources = self.repository.get_contract_sources(analysis.analysis_id)
+        if sources is None:
+            return [
+                ValidationFinding(
+                    check_id="graphql:contract-snapshot-unavailable",
+                    category=FindingCategory.STATIC_ANALYSIS,
+                    status=FindingStatus.UNKNOWN,
+                    severity=FindingSeverity.HIGH,
+                    message=(
+                        "The new GraphQL schema snapshot is unavailable for this legacy "
+                        "analysis. Run a new analysis before approving a patch."
+                    ),
+                )
+            ]
+        _, new_content = sources
+        new_contract = parse_graphql_schema(analysis.new_filename, new_content)
+        return validate_graphql_contract(changes, patched, new_schema=new_contract.schema)
 
     async def _verified_source(
         self,

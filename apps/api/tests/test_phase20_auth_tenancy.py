@@ -237,6 +237,27 @@ def test_mock_oauth_can_create_two_isolated_development_users(tmp_path) -> None:
     assert "code=mock-user-secondary" in service.begin(identity_hint="secondary")
 
 
+def test_beta_allowlist_rejects_unapproved_oauth_user_before_workspace_creation(tmp_path) -> None:
+    repository = SQLiteWorkspaceRepository(tmp_path / "allowlist.sqlite3")
+    repository.initialize()
+    service = AuthService(
+        repository,
+        MockGitHubOAuthProvider(),
+        callback_url="http://testserver/api/v1/auth/github/callback",
+        frontend_url="http://localhost:5173",
+        session_ttl_hours=24,
+        session_secret="phase20-test-secret",
+        allowed_github_logins=("primary",),
+    )
+
+    state = service.issue_state()
+    with pytest.raises(DriftGuardError) as error:
+        asyncio.run(service.callback("mock-user-secondary", state))
+
+    assert error.value.code == "beta_access_denied"
+    assert repository.get_user_by_external_identity("github", "2") is None
+
+
 def test_development_identities_are_exposed_only_in_development() -> None:
     development = replace(
         settings,
@@ -327,6 +348,7 @@ def test_production_configuration_rejects_mock_product_providers() -> None:
         github_oauth_callback_url="https://api.driftguard.example/api/v1/auth/github/callback",
         frontend_url="https://driftguard.example",
         secure_cookies=True,
+        session_cookie_same_site="none",
         session_secret="a-production-session-secret-with-32-characters",
         ai_provider="gemini",
         migration_provider="gemini",
@@ -334,6 +356,13 @@ def test_production_configuration_rejects_mock_product_providers() -> None:
         test_plan_provider="gemini",
         github_write_provider="github_app",
         github_check_provider="github_app",
+        storage_backend="firestore",
+        github_webhook_secret="webhook-secret",
+        github_app_id="12345",
+        github_app_private_key_path="/run/secrets/github-app-private-key.pem",
+        beta_allowed_github_logins=("approved-user",),
+        remote_specification_urls_enabled=False,
+        rate_limit_enabled=True,
     )
     validate_security_settings(production)
 

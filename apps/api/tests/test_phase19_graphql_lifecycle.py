@@ -43,8 +43,10 @@ def test_graphql_patch_validation_and_report_lifecycle(client):
     patch = generated.json()
     assert patch["files_changed"] == 1
     assert patch["files"][0]["file_path"] == "src/paymentClient.ts"
-    assert "$customerId: ID!" in patch["unified_diff"]
-    assert "customerId: $customerId" in patch["unified_diff"]
+    assert "+    mutation CreatePayment {" in patch["unified_diff"]
+    assert "+      createPayment(amount: 100) { id }" in patch["unified_diff"]
+    assert "+$customerId: ID!" not in patch["unified_diff"]
+    assert any("no proven application-value mapping" in item for item in patch["warnings"])
     assert "src/checkout.ts" not in patch["unified_diff"]
 
     validated = client.post(
@@ -53,9 +55,9 @@ def test_graphql_patch_validation_and_report_lifecycle(client):
     )
     assert validated.status_code == 200, validated.text
     validation = validated.json()
-    assert validation["readiness"] in {"ready_for_review", "needs_review"}
+    assert validation["readiness"] == "blocked"
     assert validation["static_only"] is True
-    assert all(item["status"] != "fail" for item in validation["contract_findings"])
+    assert any(item["status"] == "fail" for item in validation["contract_findings"])
 
     report = client.get(f"/api/v1/analyses/{analysis_id}/report")
     assert report.status_code == 200

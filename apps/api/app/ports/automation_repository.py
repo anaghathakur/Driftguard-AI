@@ -37,6 +37,11 @@ class AutomationRepository(ABC):
     def claim_due_jobs(self, now: datetime, limit: int = 10) -> list[BackgroundJob]: ...
 
     @abstractmethod
+    def recover_stale_jobs(
+        self, now: datetime, *, retry_limit: int, stale_after_seconds: float
+    ) -> list[BackgroundJob]: ...
+
+    @abstractmethod
     def save_job(self, job: BackgroundJob) -> None: ...
 
     @abstractmethod

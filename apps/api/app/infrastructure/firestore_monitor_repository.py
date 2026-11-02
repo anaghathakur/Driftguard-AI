@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -11,8 +12,14 @@ from apps.api.app.core.workspace_context import (
     LOCAL_WORKSPACE_ID,
     current_workspace_id,
 )
-from apps.api.app.domain.monitor import ApiMonitor, MonitorCheckRecord, MonitorCheckStatus
+from apps.api.app.domain.monitor import (
+    ApiMonitor,
+    ContractSourceType,
+    MonitorCheckRecord,
+    MonitorCheckStatus,
+)
 from apps.api.app.ports.monitor_repository import ApiMonitorRepository
+from apps.api.app.schemas.comparison import ContractType
 
 _MONITORS = "api_monitors"
 _CHECKS = "checks"
@@ -99,6 +106,38 @@ class FirestoreMonitorRepository(ApiMonitorRepository):
             )
         return result
 
+    def claim_check(
+        self,
+        monitor_id: str,
+        *,
+        now: datetime,
+        lease_expires_at: datetime,
+    ) -> ApiMonitor | None:
+        reference = self._monitors.document(monitor_id)
+        transaction = self.client.transaction()
+
+        @firestore.transactional
+        def claim(transaction: Any) -> dict[str, Any] | None:
+            snapshot = reference.get(transaction=transaction)
+            if not snapshot.exists:
+                return None
+            data = snapshot.to_dict() or {}
+            if data.get("workspace_id", LOCAL_WORKSPACE_ID) != current_workspace_id():
+                return None
+            lease = _optional_datetime(data.get("check_lease_expires_at"))
+            if lease is not None and lease > now:
+                return None
+            transaction.update(reference, {"check_lease_expires_at": lease_expires_at})
+            return data
+
+        data = claim(transaction)
+        if data is None:
+            return None
+        return replace(
+            _monitor(data, _baseline_content(reference)),
+            check_lease_expires_at=lease_expires_at,
+        )
+
     def delete(self, monitor_id: str) -> bool:
         reference = self._monitors.document(monitor_id)
         snapshot = reference.get()
@@ -183,6 +222,11 @@ def _monitor_data(monitor: ApiMonitor) -> dict[str, Any]:
         ),
         "last_error_code": monitor.last_error_code,
         "last_error_message": monitor.last_error_message,
+        "source_type": monitor.source_type.value,
+        "source_path": monitor.source_path,
+        "repository_connection_id": monitor.repository_connection_id,
+        "contract_type": monitor.contract_type.value if monitor.contract_type else None,
+        "check_lease_expires_at": monitor.check_lease_expires_at,
     }
 
 
@@ -225,6 +269,13 @@ def _monitor(data: dict[str, Any], baseline_content: bytes) -> ApiMonitor:
         ),
         last_error_code=data.get("last_error_code"),
         last_error_message=data.get("last_error_message"),
+        source_type=ContractSourceType(data.get("source_type", ContractSourceType.HTTP_URL)),
+        source_path=data.get("source_path"),
+        repository_connection_id=data.get("repository_connection_id"),
+        contract_type=(
+            ContractType(data["contract_type"]) if data.get("contract_type") else None
+        ),
+        check_lease_expires_at=_optional_datetime(data.get("check_lease_expires_at")),
     )
 
 

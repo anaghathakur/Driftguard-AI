@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import UTC, datetime
+from dataclasses import replace
+from datetime import UTC, datetime, timedelta
 
 from apps.api.app.api.routes.automation import discover_repository_contracts
 from apps.api.app.core.config import settings
@@ -178,6 +179,28 @@ def test_job_survives_repository_recreation(tmp_path):
     asyncio.run(worker.run_once())
 
     assert restarted.get_job("job-1", LOCAL_WORKSPACE_ID).status is BackgroundJobStatus.SUCCEEDED
+
+
+def test_stale_running_job_is_recovered_after_worker_restart(tmp_path):
+    automation, _, github, worker, installation, connection = _setup(tmp_path)
+    github.snapshots[(connection.github_repository_id, BASE_SHA)] = {"openapi.yaml": OLD_SPEC}
+    github.snapshots[(connection.github_repository_id, HEAD_SHA)] = {"openapi.yaml": NEW_SPEC}
+    job = _pr_job(automation, installation, connection)
+    now = datetime.now(UTC)
+    automation.save_job(
+        replace(
+            job,
+            status=BackgroundJobStatus.RUNNING,
+            attempt_count=1,
+            started_at=now - timedelta(minutes=2),
+        )
+    )
+
+    assert asyncio.run(worker.run_once(now=now)) == 1
+    recovered = automation.get_job(job.job_id, LOCAL_WORKSPACE_ID)
+    assert recovered is not None
+    assert recovered.status is BackgroundJobStatus.SUCCEEDED
+    assert recovered.attempt_count == 2
 
 
 class _RateLimitedProvider(MockGitHubAutomationProvider):

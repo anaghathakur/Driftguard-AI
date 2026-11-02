@@ -117,7 +117,7 @@ async def github_callback(code: str, state: str, service: Auth) -> RedirectRespo
         session_token,
         httponly=True,
         secure=settings.secure_cookies,
-        samesite="lax",
+        samesite=settings.session_cookie_same_site,
         max_age=settings.session_ttl_hours * 3600,
         path="/",
     )
@@ -126,7 +126,7 @@ async def github_callback(code: str, state: str, service: Auth) -> RedirectRespo
         csrf_token,
         httponly=False,
         secure=settings.secure_cookies,
-        samesite="lax",
+        samesite=settings.session_cookie_same_site,
         max_age=settings.session_ttl_hours * 3600,
         path="/",
     )

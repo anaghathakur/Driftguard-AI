@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from graphql import GraphQLError, parse
+import re
+
+from graphql import GraphQLError, GraphQLSchema, parse, validate
 from graphql.language import FieldNode, OperationDefinitionNode, print_ast
 
 from apps.api.app.domain.repository import RepositoryScan
@@ -17,10 +19,15 @@ from apps.api.app.schemas.validation import (
 
 
 def validate_graphql_contract(
-    changes: list[ApiChange], scan: RepositoryScan
+    changes: list[ApiChange],
+    scan: RepositoryScan,
+    *,
+    new_schema: GraphQLSchema | None = None,
 ) -> list[ValidationFinding]:
     documents = _parse_documents(scan)
-    findings: list[ValidationFinding] = []
+    findings: list[ValidationFinding] = _parse_findings(scan)
+    if new_schema is not None:
+        findings.extend(_schema_findings(documents, new_schema))
     for change in changes:
         if change.change_type not in {
             ChangeType.ARGUMENT_REMOVED,
@@ -95,6 +102,93 @@ def validate_graphql_document(content: str) -> None:
         parse(content)
     except GraphQLError as exc:
         raise ValueError("Invalid GraphQL document") from exc
+
+
+def _schema_findings(documents, schema: GraphQLSchema) -> list[ValidationFinding]:
+    findings: list[ValidationFinding] = []
+    for parsed in documents:
+        for index, error in enumerate(validate(schema, parsed.document)):
+            location = error.locations[0] if error.locations else None
+            findings.append(
+                ValidationFinding(
+                    check_id=f"graphql:schema:{parsed.file.path}:{index}",
+                    category=FindingCategory.STATIC_ANALYSIS,
+                    status=FindingStatus.FAIL,
+                    severity=FindingSeverity.HIGH,
+                    message=_safe_schema_message(error),
+                    file_path=parsed.file.path,
+                    line=location.line if location else None,
+                    column=location.column if location else None,
+                )
+            )
+    return findings
+
+
+def _parse_findings(scan: RepositoryScan) -> list[ValidationFinding]:
+    """Surface malformed embedded documents instead of silently skipping them."""
+
+    findings: list[ValidationFinding] = []
+    for source in scan.files:
+        candidates = _document_candidates(source.path, source.content)
+        for index, (body, offset) in enumerate(candidates):
+            try:
+                parse(body, no_location=False)
+            except GraphQLError:
+                line = source.content.count("\n", 0, offset) + 1
+                findings.append(
+                    ValidationFinding(
+                        check_id=f"graphql:syntax:{source.path}:{index}",
+                        category=FindingCategory.STATIC_ANALYSIS,
+                        status=FindingStatus.FAIL,
+                        severity=FindingSeverity.HIGH,
+                        message="A patched GraphQL consumer document has invalid syntax.",
+                        file_path=source.path,
+                        line=line,
+                    )
+                )
+    return findings
+
+
+def _document_candidates(path: str, content: str) -> list[tuple[str, int]]:
+    suffix = path.rsplit(".", 1)[-1].lower() if "." in path else ""
+    if suffix in {"graphql", "gql"}:
+        return [(content, 0)]
+    if suffix in {"js", "jsx", "ts", "tsx"}:
+        return [
+            (match.group("body"), match.start("body"))
+            for match in re.finditer(
+                r"(?:\b(?:gql|graphql)\s*)`(?P<body>[\s\S]*?)`", content, re.MULTILINE
+            )
+        ]
+    if suffix == "py":
+        return [
+            (match.group("body"), match.start("body"))
+            for match in re.finditer(
+                r"(?P<quote>'''|\"\"\")(?P<body>[\s\S]*?)(?P=quote)", content, re.MULTILINE
+            )
+            if re.search(
+                r"\b(query|mutation|subscription|fragment)\b|\{\s*[_A-Za-z]",
+                match.group("body"),
+            )
+        ]
+    return []
+
+
+def _safe_schema_message(error: GraphQLError) -> str:
+    message = error.message
+    if "is never used" in message:
+        return "A GraphQL operation has an unused variable."
+    if "is not defined" in message:
+        return "A GraphQL operation references an undefined variable."
+    if "Cannot query field" in message:
+        return "A GraphQL operation selects a field that is absent from the new schema."
+    if "Unknown argument" in message:
+        return "A GraphQL operation supplies an argument that is absent from the new schema."
+    if "is required" in message:
+        return "A GraphQL operation is missing a required argument or input field."
+    if "Expected type" in message or "Variable" in message:
+        return "A GraphQL operation has an incompatible variable, enum, or input value."
+    return "A GraphQL operation does not validate against the new schema."
 
 
 def _operation_fields(change: ApiChange, document):

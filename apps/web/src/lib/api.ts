@@ -451,8 +451,12 @@ export type MonitorCheckStatus =
 export type ApiMonitor = {
   monitor_id: string;
   name: string;
-  specification_url: string;
-  repository_url: string;
+  source_type: "http_url" | "github_file";
+  specification_url: string | null;
+  source_path: string | null;
+  repository_connection_id: string | null;
+  contract_type: "openapi" | "graphql" | null;
+  repository_url: string | null;
   repository_ref: string | null;
   check_interval_minutes: number;
   enabled: boolean;
@@ -485,8 +489,11 @@ export type MonitorCheck = {
 
 export type CreateMonitorInput = {
   name: string;
-  specification_url: string;
-  repository_url: string;
+  source_type?: "http_url" | "github_file";
+  specification_url?: string;
+  source_path?: string;
+  repository_connection_id?: string;
+  repository_url?: string;
   repository_ref?: string;
   check_interval_minutes: number;
   enabled: boolean;

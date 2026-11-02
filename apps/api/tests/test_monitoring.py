@@ -10,7 +10,12 @@ from types import SimpleNamespace
 import pytest
 
 from apps.api.app.core.exceptions import DriftGuardError
-from apps.api.app.domain.monitor import ApiMonitor, MonitorCheckRecord, MonitorCheckStatus
+from apps.api.app.domain.monitor import (
+    ApiMonitor,
+    ContractSourceType,
+    MonitorCheckRecord,
+    MonitorCheckStatus,
+)
 from apps.api.app.monitoring.scheduler import MonitorScheduler
 from apps.api.app.monitoring.service import ApiMonitorService, MonitorCheckService
 from apps.api.app.monitoring.specification_source import RemoteSpecification
@@ -128,6 +133,10 @@ class FakePipeline:
         self.calls.append(kwargs)
         return SimpleNamespace(analysis_id="analysis-1")
 
+    def compare(self, **kwargs):
+        self.calls.append(kwargs)
+        return SimpleNamespace(analysis_id="comparison-1")
+
 
 def monitor(baseline: RemoteSpecification, **updates) -> ApiMonitor:
     value = ApiMonitor(
@@ -238,6 +247,128 @@ def test_changed_check_uses_github_pipeline_and_advances_baseline():
     assert stored.last_successful_analysis_id == "analysis-1"
 
 
+def test_changed_contract_without_repository_persists_comparison_only():
+    repository = MemoryMonitorRepository()
+    repository.create(monitor(spec("1.0.0"), repository_url=""))
+    github = FakeGitHubSource()
+    pipeline = FakePipeline()
+    service = MonitorCheckService(
+        repository,
+        FakeSpecificationSource(spec("2.0.0")),
+        github,
+        pipeline,
+        clock=lambda: NOW + timedelta(hours=1),
+    )
+
+    response = asyncio.run(service.check("monitor-1"))
+
+    assert response.status == MonitorCheckStatus.CHANGED
+    assert response.analysis_id == "comparison-1"
+    assert github.calls == 0
+    assert "repository_content" not in pipeline.calls[0]
+    assert repository.get("monitor-1").last_successful_analysis_id == "comparison-1"
+
+
+def test_github_file_subscription_uses_connected_repository_source_at_baseline():
+    repository = MemoryMonitorRepository()
+    source = FakeSpecificationSource(spec("1.0.0"))
+    connected_repository = SimpleNamespace(html_url="https://github.com/acme/payments")
+
+    class GitHubFileSource:
+        calls: list[tuple[str, str, str | None]] = []
+
+        async def fetch(self, connection_id: str, path: str, ref: str | None):
+            self.calls.append((connection_id, path, ref))
+            return SimpleNamespace(
+                specification=spec("1.0.0"),
+                repository=connected_repository,
+                commit_sha="a" * 40,
+            )
+
+    github_file_source = GitHubFileSource()
+    service = ApiMonitorService(
+        repository,
+        source,
+        github_file_source,
+        clock=lambda: NOW,
+    )
+
+    response = asyncio.run(
+        service.create(
+            MonitorCreateRequest(
+                name="Payments schema",
+                source_type=ContractSourceType.GITHUB_FILE,
+                source_path="contracts/payment.graphql",
+                repository_connection_id="connection-1",
+                check_interval_minutes=60,
+            )
+        )
+    )
+
+    assert github_file_source.calls == [
+        ("connection-1", "contracts/payment.graphql", None)
+    ]
+    assert response.source_type is ContractSourceType.GITHUB_FILE
+    assert response.repository_url == "https://github.com/acme/payments"
+    assert response.repository_ref is None
+    assert response.contract_type.value == "openapi"
+
+
+def test_github_file_check_keeps_branch_ref_but_records_immutable_analysis_commit():
+    repository = MemoryMonitorRepository()
+    repository.create(
+        monitor(
+            spec("1.0.0"),
+            source_type=ContractSourceType.GITHUB_FILE,
+            source_path="contracts/openapi.yaml",
+            repository_connection_id="connection-1",
+            repository_url="https://github.com/acme/payments",
+            repository_ref="main",
+        )
+    )
+    connected_repository = SimpleNamespace(html_url="https://github.com/acme/payments")
+
+    class GitHubFileSource:
+        calls: list[tuple[str, str, str | None]] = []
+
+        async def fetch(self, connection_id: str, path: str, ref: str | None):
+            self.calls.append((connection_id, path, ref))
+            return SimpleNamespace(
+                specification=spec("2.0.0"),
+                repository=connected_repository,
+                commit_sha="b" * 40,
+            )
+
+        async def fetch_repository(self, _repository, commit_sha: str):
+            assert commit_sha == "b" * 40
+            return GitHubRepositoryArchive(
+                owner="acme",
+                repository="payments",
+                ref="main",
+                filename="payments.zip",
+                content=b"archive",
+                commit_sha=commit_sha,
+            )
+
+    github_file_source = GitHubFileSource()
+    pipeline = FakePipeline()
+    service = MonitorCheckService(
+        repository,
+        FakeSpecificationSource(spec("1.0.0")),
+        FakeGitHubSource(),
+        pipeline,
+        github_file_source,
+        clock=lambda: NOW + timedelta(hours=1),
+    )
+
+    response = asyncio.run(service.check("monitor-1"))
+
+    assert response.status is MonitorCheckStatus.CHANGED
+    assert github_file_source.calls == [("connection-1", "contracts/openapi.yaml", "main")]
+    assert pipeline.calls[0]["repository_commit_sha"] == "b" * 40
+    assert repository.get("monitor-1").repository_ref == "main"
+
+
 def test_failed_changed_check_preserves_baseline_and_can_retry():
     repository = MemoryMonitorRepository()
     repository.create(monitor(spec("1.0.0")))
@@ -346,10 +477,50 @@ def test_sqlite_monitor_repository_crud_due_and_history(analysis_repository):
     assert repository.get("monitor-1") is None
 
 
-def test_firestore_monitor_repository_chunks_baseline_and_updates_check_atomically():
+def test_sqlite_monitor_check_lease_allows_one_worker_and_recovers_after_expiry(
+    analysis_repository,
+):
+    from apps.api.app.infrastructure.sqlite_monitor_repository import (
+        SQLiteMonitorRepository,
+    )
+
+    repository = SQLiteMonitorRepository(analysis_repository.database_path)
+    repository.initialize()
+    stored = monitor(spec("1.0.0"))
+    repository.create(stored)
+
+    first = repository.claim_check(
+        stored.monitor_id,
+        now=NOW,
+        lease_expires_at=NOW + timedelta(minutes=15),
+    )
+    assert first is not None
+    assert first.check_lease_expires_at == NOW + timedelta(minutes=15)
+    assert (
+        repository.claim_check(
+            stored.monitor_id,
+            now=NOW + timedelta(minutes=1),
+            lease_expires_at=NOW + timedelta(minutes=16),
+        )
+        is None
+    )
+
+    recovered = repository.claim_check(
+        stored.monitor_id,
+        now=NOW + timedelta(minutes=16),
+        lease_expires_at=NOW + timedelta(minutes=31),
+    )
+    assert recovered is not None
+    assert recovered.check_lease_expires_at == NOW + timedelta(minutes=31)
+
+
+def test_firestore_monitor_repository_chunks_baseline_and_updates_check_atomically(monkeypatch):
+    from apps.api.app.infrastructure import firestore_monitor_repository as module
     from apps.api.app.infrastructure.firestore_monitor_repository import (
         FirestoreMonitorRepository,
     )
+
+    monkeypatch.setattr(module.firestore, "transactional", lambda function: function)
 
     class Snapshot:
         def __init__(self, reference, data):
@@ -365,7 +536,7 @@ def test_firestore_monitor_repository_chunks_baseline_and_updates_check_atomical
             self.client = client
             self.path = path
 
-        def get(self):
+        def get(self, transaction=None):
             return Snapshot(self, self.client.data.get(self.path))
 
         def collection(self, name):
@@ -432,10 +603,20 @@ def test_firestore_monitor_repository_chunks_baseline_and_updates_check_atomical
         def batch(self):
             return Batch(self)
 
+        def transaction(self):
+            return Transaction(self)
+
         def recursive_delete(self, reference):
             for path in list(self.data):
                 if path[: len(reference.path)] == reference.path:
                     del self.data[path]
+
+    class Transaction:
+        def __init__(self, client):
+            self.client = client
+
+        def update(self, reference, values):
+            self.client.data[reference.path].update(values)
 
     client = Client()
     repository = FirestoreMonitorRepository(client=client)
@@ -447,6 +628,22 @@ def test_firestore_monitor_repository_chunks_baseline_and_updates_check_atomical
     )
     repository.create(stored)
     assert repository.get("monitor-1") == stored
+    lease_expiry = NOW + timedelta(minutes=15)
+    claimed = repository.claim_check(
+        "monitor-1",
+        now=NOW,
+        lease_expires_at=lease_expiry,
+    )
+    assert claimed is not None
+    assert claimed.check_lease_expires_at == lease_expiry
+    assert (
+        repository.claim_check(
+            "monitor-1",
+            now=NOW + timedelta(minutes=1),
+            lease_expires_at=NOW + timedelta(minutes=16),
+        )
+        is None
+    )
 
     check = MonitorCheckRecord(
         check_id="check-firestore",
