@@ -1,19 +1,26 @@
-# Copy outside the repository as terraform.tfvars. Do not put any secret here.
-project_id               = "your-gcp-project-id"
-region                   = "asia-south1"
-environment              = "production"
-api_image                = "asia-south1-docker.pkg.dev/your-gcp-project-id/driftguard/api@sha256:replace-me"
-web_image                = "asia-south1-docker.pkg.dev/your-gcp-project-id/driftguard/web@sha256:replace-me"
-frontend_url             = "https://app.example.com"
-github_oauth_callback_url = "https://api.example.com/api/v1/auth/github/callback"
-github_app_install_url   = "https://github.com/apps/your-app/installations/new"
-cors_allowed_origins     = "https://app.example.com"
-firestore_database_id    = "driftguard-db"
-# Initial import must retain the existing database's disabled protection setting.
+# Copy outside the repository as terraform.tfvars. Never store secret values here.
+project_id            = "your-gcp-project-id"
+region                = "asia-south1"
+environment           = "production"
+firestore_database_id = "driftguard-db"
+firestore_location_id = "asia-south1"
+
+# Keep false until its dedicated reviewed plan is approved.
 enable_firestore_deletion_protection = false
-# Controlled beta access policy, not a secret.
-beta_allowed_github_logins = "replace-with-approved-github-login"
-api_min_instances          = 0
-# Keep false for the private bootstrap revision; set true only for the final,
-# reviewed, configured controlled-beta revision.
-public_transport_enabled = false
+
+# Both are false by default: this example must remain safe to plan locally.
+enable_hosted_beta_foundation = false
+enable_runtime_services       = false
+public_transport_enabled      = false
+
+# Required only for Stage 2. Image references should use immutable digests, not
+# mutable tags. Terraform derives the service, frontend, CORS, and OAuth callback
+# URLs from the project number, region, and fixed service names.
+api_image                  = ""
+web_image                  = ""
+github_app_install_url     = ""
+beta_allowed_github_logins = ""
+
+# The controlled beta deliberately allows only one of each service.
+api_max_instances = 1
+web_max_instances = 1

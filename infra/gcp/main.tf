@@ -1,5 +1,15 @@
+# The database already exists and is imported into the remote Terraform state.
+# It is always protected from destroy. Hosted-beta resources remain opt-in.
+data "google_project" "current" {
+  project_id = var.project_id
+}
+
 locals {
-  name_prefix = "driftguard-${var.environment}"
+  name_prefix      = "driftguard-${var.environment}"
+  api_service_name = "${local.name_prefix}-api"
+  web_service_name = "${local.name_prefix}-web"
+  api_service_url  = "https://${local.api_service_name}-${data.google_project.current.number}.${var.region}.run.app"
+  web_service_url  = "https://${local.web_service_name}-${data.google_project.current.number}.${var.region}.run.app"
   labels = {
     application = "driftguard"
     environment = var.environment
@@ -13,66 +23,6 @@ locals {
     "github-app-private-key",
     "github-webhook-secret",
   ])
-  job_environment = {
-    DRIFTGUARD_ENVIRONMENT                       = "production"
-    DRIFTGUARD_AUTH_MODE                         = "github"
-    DRIFTGUARD_STORAGE_BACKEND                   = "firestore"
-    DRIFTGUARD_FIRESTORE_PROJECT_ID              = var.project_id
-    DRIFTGUARD_FIRESTORE_DATABASE_ID             = var.firestore_database_id
-    DRIFTGUARD_SECURE_COOKIES                    = "true"
-    DRIFTGUARD_SESSION_COOKIE_SAME_SITE          = "none"
-    DRIFTGUARD_FRONTEND_URL                      = var.frontend_url
-    DRIFTGUARD_CORS_ALLOWED_ORIGINS              = var.cors_allowed_origins
-    DRIFTGUARD_GITHUB_OAUTH_PROVIDER             = "github"
-    DRIFTGUARD_GITHUB_OAUTH_CALLBACK_URL         = var.github_oauth_callback_url
-    DRIFTGUARD_GITHUB_APP_INSTALL_URL            = var.github_app_install_url
-    DRIFTGUARD_BETA_ALLOWED_GITHUB_LOGINS        = var.beta_allowed_github_logins
-    DRIFTGUARD_REMOTE_SPECIFICATION_URLS_ENABLED = "false"
-    DRIFTGUARD_RATE_LIMIT_ENABLED                = "true"
-    DRIFTGUARD_GITHUB_WRITE_PROVIDER             = "github_app"
-    DRIFTGUARD_GITHUB_CHECK_PROVIDER             = "github_app"
-    DRIFTGUARD_MONITOR_SCHEDULER_ENABLED         = "false"
-    DRIFTGUARD_AUTOMATION_WORKER_ENABLED         = "false"
-    DRIFTGUARD_VALIDATION_EXECUTION_PROVIDER     = "disabled"
-    DRIFTGUARD_GITHUB_APP_PRIVATE_KEY_PATH       = "/var/run/secrets/github-app/private-key.pem"
-  }
-  secret_environment = {
-    DRIFTGUARD_SESSION_SECRET             = "driftguard-session-secret"
-    DRIFTGUARD_GITHUB_OAUTH_CLIENT_ID     = "github-oauth-client-id"
-    DRIFTGUARD_GITHUB_OAUTH_CLIENT_SECRET = "github-oauth-client-secret"
-    DRIFTGUARD_GITHUB_APP_ID              = "github-app-id"
-    DRIFTGUARD_GITHUB_WEBHOOK_SECRET      = "github-webhook-secret"
-  }
-}
-
-resource "google_project_service" "required" {
-  for_each = toset([
-    "artifactregistry.googleapis.com",
-    "cloudbuild.googleapis.com",
-    "cloudresourcemanager.googleapis.com",
-    "cloudscheduler.googleapis.com",
-    "firestore.googleapis.com",
-    "iam.googleapis.com",
-    "iamcredentials.googleapis.com",
-    "logging.googleapis.com",
-    "monitoring.googleapis.com",
-    "run.googleapis.com",
-    "secretmanager.googleapis.com",
-    "serviceusage.googleapis.com",
-  ])
-
-  service            = each.value
-  disable_on_destroy = false
-}
-
-resource "google_artifact_registry_repository" "images" {
-  location      = var.region
-  repository_id = "driftguard"
-  description   = "DriftGuard production container images"
-  format        = "DOCKER"
-  labels        = local.labels
-
-  depends_on = [google_project_service.required]
 }
 
 resource "google_firestore_database" "primary" {
@@ -90,56 +40,81 @@ resource "google_firestore_database" "primary" {
   lifecycle {
     prevent_destroy = true
   }
+}
 
-  depends_on = [google_project_service.required]
+# Stage 1 creates only the deployment foundation. These resources never contain
+# secret values; operators add real Secret Manager versions separately.
+resource "google_artifact_registry_repository" "images" {
+  count = var.enable_hosted_beta_foundation ? 1 : 0
+
+  location      = var.region
+  repository_id = "driftguard"
+  description   = "DriftGuard controlled-beta container images"
+  format        = "DOCKER"
+  labels        = local.labels
 }
 
 resource "google_service_account" "runtime" {
+  count = var.enable_hosted_beta_foundation ? 1 : 0
+
   account_id   = "driftguard-runtime"
   display_name = "DriftGuard Cloud Run runtime"
 }
 
-resource "google_service_account" "scheduler" {
-  account_id   = "driftguard-scheduler"
-  display_name = "DriftGuard Cloud Scheduler job invoker"
-}
-
 resource "google_secret_manager_secret" "application" {
-  for_each  = local.secret_names
+  for_each  = var.enable_hosted_beta_foundation ? local.secret_names : toset([])
   secret_id = each.value
   labels    = local.labels
 
   replication {
     auto {}
   }
-
-  depends_on = [google_project_service.required]
 }
 
-resource "google_project_iam_member" "runtime" {
-  for_each = toset([
-    "roles/datastore.user",
-    "roles/logging.logWriter",
-    "roles/monitoring.metricWriter",
-    "roles/secretmanager.secretAccessor",
-  ])
+# The runtime can access application data and only the six named secrets.
+resource "google_project_iam_member" "runtime_firestore" {
+  count = var.enable_hosted_beta_foundation ? 1 : 0
 
   project = var.project_id
-  role    = each.value
-  member  = "serviceAccount:${google_service_account.runtime.email}"
+  role    = "roles/datastore.user"
+  member  = "serviceAccount:${google_service_account.runtime[0].email}"
 }
 
+resource "google_project_iam_member" "runtime_logging" {
+  count = var.enable_hosted_beta_foundation ? 1 : 0
+
+  project = var.project_id
+  role    = "roles/logging.logWriter"
+  member  = "serviceAccount:${google_service_account.runtime[0].email}"
+}
+
+resource "google_secret_manager_secret_iam_member" "runtime_access" {
+  for_each = var.enable_hosted_beta_foundation ? local.secret_names : toset([])
+
+  project   = var.project_id
+  secret_id = google_secret_manager_secret.application[each.value].secret_id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.runtime[0].email}"
+}
+
+# Stage 2 is enabled only after immutable images exist and every required
+# secret has a real, manually provisioned version. There are no Jobs or
+# Schedulers in this beta, so monitoring remains manual through Check now.
 resource "google_cloud_run_v2_service" "api" {
-  name     = "${local.name_prefix}-api"
+  count = var.enable_runtime_services ? 1 : 0
+
+  name     = local.api_service_name
   location = var.region
   ingress  = "INGRESS_TRAFFIC_ALL"
   labels   = local.labels
 
   template {
-    service_account = google_service_account.runtime.email
+    service_account                  = google_service_account.runtime[0].email
+    timeout                          = "300s"
+    max_instance_request_concurrency = 20
 
     scaling {
-      min_instance_count = var.api_min_instances
+      min_instance_count = 0
       max_instance_count = var.api_max_instances
     }
 
@@ -187,11 +162,11 @@ resource "google_cloud_run_v2_service" "api" {
       }
       env {
         name  = "DRIFTGUARD_FRONTEND_URL"
-        value = var.frontend_url
+        value = local.web_service_url
       }
       env {
         name  = "DRIFTGUARD_CORS_ALLOWED_ORIGINS"
-        value = var.cors_allowed_origins
+        value = local.web_service_url
       }
       env {
         name  = "DRIFTGUARD_GITHUB_OAUTH_PROVIDER"
@@ -199,7 +174,7 @@ resource "google_cloud_run_v2_service" "api" {
       }
       env {
         name  = "DRIFTGUARD_GITHUB_OAUTH_CALLBACK_URL"
-        value = var.github_oauth_callback_url
+        value = "${local.api_service_url}/api/v1/auth/github/callback"
       }
       env {
         name  = "DRIFTGUARD_GITHUB_APP_INSTALL_URL"
@@ -236,6 +211,10 @@ resource "google_cloud_run_v2_service" "api" {
       env {
         name  = "DRIFTGUARD_VALIDATION_EXECUTION_PROVIDER"
         value = "disabled"
+      }
+      env {
+        name  = "DRIFTGUARD_GITHUB_APP_PRIVATE_KEY_PATH"
+        value = "/var/run/secrets/github-app/private-key.pem"
       }
 
       env {
@@ -283,10 +262,6 @@ resource "google_cloud_run_v2_service" "api" {
           }
         }
       }
-      env {
-        name  = "DRIFTGUARD_GITHUB_APP_PRIVATE_KEY_PATH"
-        value = "/var/run/secrets/github-app/private-key.pem"
-      }
 
       volume_mounts {
         name       = "github-app-private-key"
@@ -306,348 +281,93 @@ resource "google_cloud_run_v2_service" "api" {
     }
   }
 
-  depends_on = [google_project_iam_member.runtime]
+  lifecycle {
+    precondition {
+      condition     = var.enable_hosted_beta_foundation
+      error_message = "Enable hosted-beta foundation before creating runtime services."
+    }
+    precondition {
+      condition = alltrue([
+        trimspace(var.api_image) != "",
+        trimspace(var.github_app_install_url) != "",
+        trimspace(var.beta_allowed_github_logins) != "",
+      ])
+      error_message = "Runtime services require an immutable API image, a GitHub App installation URL, and a beta allowlist."
+    }
+  }
+
+  depends_on = [
+    google_project_iam_member.runtime_firestore,
+    google_project_iam_member.runtime_logging,
+    google_secret_manager_secret_iam_member.runtime_access,
+  ]
 }
 
 resource "google_cloud_run_v2_service" "web" {
-  name     = "${local.name_prefix}-web"
+  count = var.enable_runtime_services ? 1 : 0
+
+  name     = local.web_service_name
   location = var.region
   ingress  = "INGRESS_TRAFFIC_ALL"
   labels   = local.labels
 
   template {
+    timeout                          = "60s"
+    max_instance_request_concurrency = 80
+
+    scaling {
+      min_instance_count = 0
+      max_instance_count = var.web_max_instances
+    }
+
     containers {
       image = var.web_image
-      ports { container_port = 8080 }
-      resources { limits = { cpu = "1", memory = "512Mi" } }
+
+      ports {
+        container_port = 8080
+      }
+      resources {
+        limits = {
+          cpu    = "1"
+          memory = "512Mi"
+        }
+      }
     }
   }
+
+  lifecycle {
+    precondition {
+      condition     = var.enable_hosted_beta_foundation
+      error_message = "Enable hosted-beta foundation before creating runtime services."
+    }
+    precondition {
+      condition     = trimspace(var.web_image) != ""
+      error_message = "Runtime services require an immutable frontend image."
+    }
+  }
+
+  depends_on = [google_artifact_registry_repository.images]
 }
 
-# Cloud Run transport is public for the landing page, OAuth callback, and
-# browser API requests. DriftGuard itself still requires a verified GitHub
-# session plus workspace authorization for every product operation.
+# Cloud Run transport must be public for the landing page, GitHub OAuth callback,
+# and HMAC-verified GitHub webhook delivery. Product actions are still protected
+# by DriftGuard sessions, CSRF, workspace membership, and RBAC.
 resource "google_cloud_run_v2_service_iam_member" "api_public_invoker" {
-  count = var.public_transport_enabled ? 1 : 0
+  count = var.enable_runtime_services && var.public_transport_enabled ? 1 : 0
 
   project  = var.project_id
   location = var.region
-  name     = google_cloud_run_v2_service.api.name
+  name     = google_cloud_run_v2_service.api[0].name
   role     = "roles/run.invoker"
   member   = "allUsers"
 }
 
 resource "google_cloud_run_v2_service_iam_member" "web_public_invoker" {
-  count = var.public_transport_enabled ? 1 : 0
+  count = var.enable_runtime_services && var.public_transport_enabled ? 1 : 0
 
   project  = var.project_id
   location = var.region
-  name     = google_cloud_run_v2_service.web.name
+  name     = google_cloud_run_v2_service.web[0].name
   role     = "roles/run.invoker"
   member   = "allUsers"
-}
-
-resource "google_cloud_run_v2_job" "automation" {
-  name     = "${local.name_prefix}-automation"
-  location = var.region
-  labels   = local.labels
-
-  template {
-    template {
-      service_account = google_service_account.runtime.email
-      max_retries     = 1
-      timeout         = "900s"
-      containers {
-        image   = var.api_image
-        command = ["python", "-m", "apps.api.app.operations.run_automation_job"]
-        resources { limits = { cpu = "1", memory = "1Gi" } }
-
-        dynamic "env" {
-          for_each = local.job_environment
-          content {
-            name  = env.key
-            value = env.value
-          }
-        }
-        dynamic "env" {
-          for_each = local.secret_environment
-          content {
-            name = env.key
-            value_source {
-              secret_key_ref {
-                secret  = google_secret_manager_secret.application[env.value].secret_id
-                version = "latest"
-              }
-            }
-          }
-        }
-        volume_mounts {
-          name       = "github-app-private-key"
-          mount_path = "/var/run/secrets/github-app"
-        }
-      }
-
-      volumes {
-        name = "github-app-private-key"
-        secret {
-          secret = google_secret_manager_secret.application["github-app-private-key"].secret_id
-          items {
-            version = "latest"
-            path    = "private-key.pem"
-          }
-        }
-      }
-    }
-  }
-}
-
-resource "google_cloud_run_v2_job" "monitors" {
-  name     = "${local.name_prefix}-monitors"
-  location = var.region
-  labels   = local.labels
-
-  template {
-    template {
-      service_account = google_service_account.runtime.email
-      max_retries     = 1
-      timeout         = "900s"
-      containers {
-        image   = var.api_image
-        command = ["python", "-m", "apps.api.app.operations.run_monitor_job"]
-        resources { limits = { cpu = "1", memory = "1Gi" } }
-
-        dynamic "env" {
-          for_each = local.job_environment
-          content {
-            name  = env.key
-            value = env.value
-          }
-        }
-        dynamic "env" {
-          for_each = local.secret_environment
-          content {
-            name = env.key
-            value_source {
-              secret_key_ref {
-                secret  = google_secret_manager_secret.application[env.value].secret_id
-                version = "latest"
-              }
-            }
-          }
-        }
-        volume_mounts {
-          name       = "github-app-private-key"
-          mount_path = "/var/run/secrets/github-app"
-        }
-      }
-
-      volumes {
-        name = "github-app-private-key"
-        secret {
-          secret = google_secret_manager_secret.application["github-app-private-key"].secret_id
-          items {
-            version = "latest"
-            path    = "private-key.pem"
-          }
-        }
-      }
-    }
-  }
-}
-
-resource "google_cloud_run_v2_job_iam_member" "scheduler_can_run_automation" {
-  project  = var.project_id
-  location = var.region
-  name     = google_cloud_run_v2_job.automation.name
-  role     = "roles/run.invoker"
-  member   = format("serviceAccount:%s", google_service_account.scheduler.email)
-}
-
-resource "google_cloud_run_v2_job_iam_member" "scheduler_can_run_monitors" {
-  project  = var.project_id
-  location = var.region
-  name     = google_cloud_run_v2_job.monitors.name
-  role     = "roles/run.invoker"
-  member   = format("serviceAccount:%s", google_service_account.scheduler.email)
-}
-
-resource "google_firestore_index" "automation_jobs_by_status_created" {
-  project     = var.project_id
-  database    = var.firestore_database_id
-  collection  = "automation_jobs"
-  query_scope = "COLLECTION"
-
-  fields {
-    field_path = "status"
-    order      = "ASCENDING"
-  }
-  fields {
-    field_path = "created_at"
-    order      = "ASCENDING"
-  }
-
-  depends_on = [google_firestore_database.primary]
-}
-
-resource "google_firestore_field" "rate_limits_expiry" {
-  project    = var.project_id
-  database   = var.firestore_database_id
-  collection = "rate_limits"
-  field      = "expires_at"
-
-  ttl_config {}
-
-  depends_on = [google_firestore_database.primary]
-}
-
-resource "google_firestore_index" "automation_jobs_by_status_next_attempt" {
-  project     = var.project_id
-  database    = var.firestore_database_id
-  collection  = "automation_jobs"
-  query_scope = "COLLECTION"
-
-  fields {
-    field_path = "status"
-    order      = "ASCENDING"
-  }
-  fields {
-    field_path = "next_attempt_at"
-    order      = "ASCENDING"
-  }
-
-  depends_on = [google_firestore_database.primary]
-}
-
-resource "google_firestore_index" "automation_jobs_by_status_started" {
-  project     = var.project_id
-  database    = var.firestore_database_id
-  collection  = "automation_jobs"
-  query_scope = "COLLECTION"
-
-  fields {
-    field_path = "status"
-    order      = "ASCENDING"
-  }
-  fields {
-    field_path = "started_at"
-    order      = "ASCENDING"
-  }
-
-  depends_on = [google_firestore_database.primary]
-}
-
-resource "google_firestore_index" "automation_jobs_by_workspace_created" {
-  project     = var.project_id
-  database    = var.firestore_database_id
-  collection  = "automation_jobs"
-  query_scope = "COLLECTION"
-
-  fields {
-    field_path = "workspace_id"
-    order      = "ASCENDING"
-  }
-  fields {
-    field_path = "created_at"
-    order      = "DESCENDING"
-  }
-
-  depends_on = [google_firestore_database.primary]
-}
-
-resource "google_firestore_index" "automation_contracts_by_workspace_repository_path" {
-  project     = var.project_id
-  database    = var.firestore_database_id
-  collection  = "automation_contracts"
-  query_scope = "COLLECTION"
-
-  fields {
-    field_path = "workspace_id"
-    order      = "ASCENDING"
-  }
-  fields {
-    field_path = "repository_connection_id"
-    order      = "ASCENDING"
-  }
-  fields {
-    field_path = "path"
-    order      = "ASCENDING"
-  }
-
-  depends_on = [google_firestore_database.primary]
-}
-
-resource "google_firestore_index" "automation_dependencies_by_workspace_repository" {
-  project     = var.project_id
-  database    = var.firestore_database_id
-  collection  = "automation_dependencies"
-  query_scope = "COLLECTION"
-
-  fields {
-    field_path = "workspace_id"
-    order      = "ASCENDING"
-  }
-  fields {
-    field_path = "repository_connection_id"
-    order      = "ASCENDING"
-  }
-
-  depends_on = [google_firestore_database.primary]
-}
-
-resource "google_firestore_index" "automation_checks_by_workspace_repository_updated" {
-  project     = var.project_id
-  database    = var.firestore_database_id
-  collection  = "automation_checks"
-  query_scope = "COLLECTION"
-
-  fields {
-    field_path = "workspace_id"
-    order      = "ASCENDING"
-  }
-  fields {
-    field_path = "repository_connection_id"
-    order      = "ASCENDING"
-  }
-  fields {
-    field_path = "updated_at"
-    order      = "DESCENDING"
-  }
-
-  depends_on = [google_firestore_database.primary]
-}
-
-resource "google_cloud_scheduler_job" "automation" {
-  name        = "${local.name_prefix}-automation"
-  description = "Invoke one durable DriftGuard automation pass"
-  schedule    = "* * * * *"
-  time_zone   = "Etc/UTC"
-  region      = var.region
-
-  http_target {
-    http_method = "POST"
-    uri         = "https://run.googleapis.com/v2/projects/${var.project_id}/locations/${var.region}/jobs/${google_cloud_run_v2_job.automation.name}:run"
-    headers     = { "Content-Type" = "application/json" }
-    body        = base64encode("{}")
-    oauth_token { service_account_email = google_service_account.scheduler.email }
-  }
-
-  depends_on = [google_cloud_run_v2_job_iam_member.scheduler_can_run_automation]
-}
-
-resource "google_cloud_scheduler_job" "monitors" {
-  name        = "${local.name_prefix}-monitors"
-  description = "Invoke one DriftGuard contract-monitor pass"
-  schedule    = "* * * * *"
-  time_zone   = "Etc/UTC"
-  region      = var.region
-
-  http_target {
-    http_method = "POST"
-    uri         = "https://run.googleapis.com/v2/projects/${var.project_id}/locations/${var.region}/jobs/${google_cloud_run_v2_job.monitors.name}:run"
-    headers     = { "Content-Type" = "application/json" }
-    body        = base64encode("{}")
-    oauth_token { service_account_email = google_service_account.scheduler.email }
-  }
-
-  depends_on = [google_cloud_run_v2_job_iam_member.scheduler_can_run_monitors]
 }

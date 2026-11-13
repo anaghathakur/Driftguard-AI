@@ -1,117 +1,60 @@
-# DriftGuard on Google Cloud
+# DriftGuard controlled-beta Terraform
 
-These Terraform files are a reviewable deployment blueprint. They do **not**
-contain credentials, project values, secret versions, or an automatic apply
-step.
+This stack protects the imported existing Firestore database
+`driftguard-db`. It has two deliberate, opt-in deployment stages.
 
-## State bootstrap
+## Default: no new resources
 
-Before a shared staging or production deployment, create the dedicated,
-versioned GCS state bucket from infra/gcp/bootstrap using a separately
-reviewed plan and apply. Then initialize this parent stack with that bucket
-and an environment-specific state prefix. The parent stack must not use local
-state for a shared environment.
+With the example values unchanged, Terraform manages only the existing
+Firestore database and should produce no infrastructure changes. This remains
+the safe default:
 
-## Target topology
+```powershell
+terraform -chdir=infra/gcp plan -var="project_id=driftguard-ai"
+```
 
-- Cloud Run service: public FastAPI API
-- Cloud Run service: public React frontend
-- Cloud Run Jobs: one bounded automation pass and one bounded monitor pass
-- Cloud Scheduler: invokes each job once per minute
-- Firestore Native: tenant, analysis, subscription, and durable automation state
-- Secret Manager: session, GitHub OAuth/App, and webhook secrets
-- Artifact Registry: immutable container images
+Never enable deletion protection in this stack without a separately reviewed
+plan. The database is protected from destruction with `prevent_destroy`.
 
-Cloud Run public invocation defaults to disabled for the private bootstrap
-revision. Turn public_transport_enabled on only in the final reviewed beta
-revision, after GitHub OAuth, Secret Manager versions, and the frontend/API
-origins are configured. Product routes remain protected by GitHub
-authentication, the controlled-beta login allowlist, workspace authorization,
-CSRF checks, and the distributed Firestore limiter. This is suitable only for
-the restricted beta described here; a broader public launch should add an
-external Application Load Balancer and Cloud Armor.
+## Stage 1: hosted-beta foundation
 
-The controlled-beta default sets the API minimum instance count to zero to
-avoid an idle Cloud Run baseline. Increase api_min_instances only after
-accepting the associated recurring cost for lower cold-start latency.
+After a reviewed cloud-write approval, set `enable_hosted_beta_foundation` to
+`true`. It creates only:
 
-The approved project already has the Firestore Native database
-driftguard-db in asia-south1. Terraform and Cloud Run are configured to use
-that database. During the later reviewed deployment, import it into Terraform
-state rather than attempting a second create:
+- one Artifact Registry Docker repository;
+- one Cloud Run runtime service account;
+- six empty Secret Manager containers; and
+- the minimum Firestore, logging, and per-secret access bindings for that
+  runtime account.
 
-    terraform -chdir=infra/gcp import \
-      google_firestore_database.primary \
-      projects/driftguard-ai/databases/driftguard-db
+It creates no Cloud Run service, Scheduler job, Cloud Run Job, Firestore index,
+TTL policy, VPC connector, NAT, load balancer, or Cloud Armor resource.
 
-The import command is documentation only and must not be run without separate
-approval. Terraform intentionally declares PESSIMISTIC concurrency to match
-the existing database. The initial import also keeps deletion protection
-disabled so an initial reviewed deployment cannot change the existing database
-unexpectedly. The enable_firestore_deletion_protection variable defaults to
-false. Enabling it must be a separate reviewed plan, explicitly approved
-before apply, after the import and initial deployment are complete.
+Secret values are never Terraform variables. Add real versions directly to
+Secret Manager only after creating the GitHub OAuth App and GitHub App. Do not
+put private keys, client secrets, session secrets, or webhook secrets in Git.
 
-The API intentionally has `DRIFTGUARD_MONITOR_SCHEDULER_ENABLED=false` and
-`DRIFTGUARD_AUTOMATION_WORKER_ENABLED=false`. Cloud Run Jobs replace the
-process-local loops.
+## Stage 2: runtime services
 
-## Required human-approved actions
+After immutable images and all real secret versions exist, enable
+`enable_runtime_services`. It creates a request-based API service and frontend
+service, both with zero minimum instances and a hard maximum of one instance.
 
-Before any `terraform apply`, approve and perform these separately:
+The API is production-configured to use Firestore, secure cookies, GitHub OAuth,
+the GitHub App, the persisted rate limiter, and an explicit GitHub-login beta
+allowlist. Arbitrary remote contract URLs, scheduled monitors, automation
+workers, and runtime test execution stay disabled.
 
-1. Select a billing-enabled GCP project and a production/staging domain.
-2. Enable the listed APIs and create the resources with a reviewed Terraform plan.
-3. Add secret **versions** directly to Secret Manager; never use `.tfvars` for secrets.
-4. Configure GitHub OAuth callback and create/install the GitHub App with only
-   required permissions: Contents read/write, Checks write, Pull Requests write,
-   Metadata read, and webhook events.
-5. Supply a non-empty beta_allowed_github_logins value. Only those GitHub
-   accounts can establish production sessions.
-6. Map custom HTTPS domains, configure Cloud Armor/rate limits, and constrain
-   egress through VPC/Cloud NAT before exposing public remote-contract fetching.
+Terraform deterministically derives the frontend URL, API URL, CORS origin, and
+OAuth callback from the fixed service names, project number, and region. Use the
+`api_service_url` output plus `/api/v1/auth/github/callback` for GitHub OAuth,
+and the same API URL plus `/api/v1/github/webhooks` for the GitHub App webhook.
 
-## Required Google Cloud APIs
+Do not enable `public_transport_enabled` until these derived URLs, the GitHub
+App installation URL, real Secret Manager versions, and the allowlist have been
+reviewed. Public transport is necessary for
+the landing page, OAuth callback, and signed webhook delivery; application
+middleware still protects all product operations.
 
-Do not enable these services until a reviewed plan and separate approval.
-
-The main deployment stack manages:
-
-- artifactregistry.googleapis.com
-- cloudbuild.googleapis.com
-- cloudresourcemanager.googleapis.com for project IAM bindings
-- cloudscheduler.googleapis.com
-- firestore.googleapis.com
-- iam.googleapis.com for service accounts
-- iamcredentials.googleapis.com for Cloud Scheduler OAuth invocation tokens
-- logging.googleapis.com
-- monitoring.googleapis.com
-- run.googleapis.com
-- secretmanager.googleapis.com
-- serviceusage.googleapis.com
-
-The isolated state-bootstrap stack additionally requires
-storage.googleapis.com. Cloud Billing API is not required by the application
-deployment, but is required separately to inspect or manage billing.
-
-## Firestore indexes
-
-Terraform creates the required composite indexes. They may take a few minutes
-to become ready after an apply; do not enable scheduler jobs until that
-completion is visible in the Google Cloud console.
-It also configures a Firestore TTL policy for distributed rate-limit windows;
-Firestore deletes those expired documents asynchronously.
-
-| Collection | Fields |
-| --- | --- |
-| automation_jobs | status ASC, created_at ASC |
-| `automation_jobs` | `status ASC`, `next_attempt_at ASC` |
-| `automation_jobs` | `status ASC`, `started_at ASC` |
-| `automation_jobs` | `workspace_id ASC`, `created_at DESC` |
-| `automation_contracts` | `workspace_id ASC`, `repository_connection_id ASC`, `path ASC` |
-| `automation_dependencies` | `workspace_id ASC`, `repository_connection_id ASC` |
-| `automation_checks` | `workspace_id ASC`, `repository_connection_id ASC`, `updated_at DESC` |
-
-Terraform must use a remote, versioned state backend outside this repository.
-Run `terraform plan` first, review every resource/IAM change, then request a
-separate approval before `terraform apply`.
+See [the controlled-beta checklist](../../docs/controlled-beta-go-live.md) and
+[the free-tier audit](../../FREE_TIER_DEPLOYMENT_PLAN.md) before any apply.

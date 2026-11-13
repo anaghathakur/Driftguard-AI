@@ -5,83 +5,94 @@ variable "project_id" {
 
 variable "region" {
   type        = string
-  description = "Google Cloud region for Cloud Run resources."
+  description = "Google Cloud region for the controlled beta."
   default     = "asia-south1"
 }
 
 variable "environment" {
   type        = string
-  description = "Deployment environment label, normally production or staging."
+  description = "Deployment environment label. The controlled beta uses production."
   default     = "production"
-}
-
-variable "api_image" {
-  type        = string
-  description = "Immutable Artifact Registry API image digest or tag."
-}
-
-variable "web_image" {
-  type        = string
-  description = "Immutable Artifact Registry frontend image digest or tag."
-}
-
-variable "frontend_url" {
-  type        = string
-  description = "Public HTTPS frontend origin, without a trailing slash."
-}
-
-variable "github_oauth_callback_url" {
-  type        = string
-  description = "Public HTTPS GitHub OAuth callback URL."
-}
-
-variable "github_app_install_url" {
-  type        = string
-  description = "GitHub App installation URL."
-}
-
-variable "cors_allowed_origins" {
-  type        = string
-  description = "Comma-separated public browser origins."
 }
 
 variable "firestore_database_id" {
   type        = string
-  description = "Existing Firestore Native database ID to use for DriftGuard."
+  description = "Existing Firestore Native database ID."
   default     = "driftguard-db"
 }
 
 variable "firestore_location_id" {
   type        = string
-  description = "Immutable Firestore Native database location."
+  description = "Immutable location of the existing Firestore database."
   default     = "asia-south1"
 }
 
 variable "enable_firestore_deletion_protection" {
   type        = bool
-  description = "Keep false for the initial existing-database import. Enable only through a separately reviewed plan."
+  description = "Keep false until deletion protection is separately reviewed and approved."
   default     = false
 }
 
-variable "beta_allowed_github_logins" {
-  type        = string
-  description = "Comma-separated GitHub login allowlist for the controlled beta. This is not a secret."
+variable "enable_hosted_beta_foundation" {
+  type        = bool
+  description = "Create Artifact Registry, the runtime identity, and empty Secret Manager containers. Defaults to false to preserve the no-new-resource profile."
+  default     = false
 }
 
-variable "api_max_instances" {
-  type        = number
-  default     = 10
-  description = "Cloud Run API maximum instance count."
-}
-
-variable "api_min_instances" {
-  type        = number
-  default     = 0
-  description = "Cloud Run API minimum instance count. Zero avoids an idle beta baseline cost."
+variable "enable_runtime_services" {
+  type        = bool
+  description = "Create Cloud Run services only after images and real secret versions are available. Requires enable_hosted_beta_foundation."
+  default     = false
 }
 
 variable "public_transport_enabled" {
   type        = bool
+  description = "Allow unauthenticated transport to the public landing page, OAuth callback, and verified webhook endpoint. Product actions remain application-authenticated."
   default     = false
-  description = "Grant public Cloud Run invocation only after final OAuth, secret, and browser configuration is verified."
+}
+
+variable "api_image" {
+  type        = string
+  description = "Immutable Artifact Registry API image digest. Required only when runtime services are enabled."
+  default     = ""
+}
+
+variable "web_image" {
+  type        = string
+  description = "Immutable Artifact Registry frontend image digest. Required only when runtime services are enabled."
+  default     = ""
+}
+
+variable "github_app_install_url" {
+  type        = string
+  description = "GitHub App installation URL. Required only when runtime services are enabled."
+  default     = ""
+}
+
+variable "beta_allowed_github_logins" {
+  type        = string
+  description = "Comma-separated GitHub login allowlist for the controlled beta. Required only when runtime services are enabled."
+  default     = ""
+}
+
+variable "api_max_instances" {
+  type        = number
+  description = "Hard maximum Cloud Run API instance count for the controlled beta."
+  default     = 1
+
+  validation {
+    condition     = var.api_max_instances == 1
+    error_message = "The controlled beta intentionally permits only one API instance. Increase this only through a separately reviewed capacity and cost plan."
+  }
+}
+
+variable "web_max_instances" {
+  type        = number
+  description = "Hard maximum Cloud Run frontend instance count for the controlled beta."
+  default     = 1
+
+  validation {
+    condition     = var.web_max_instances == 1
+    error_message = "The controlled beta intentionally permits only one frontend instance. Increase this only through a separately reviewed capacity and cost plan."
+  }
 }

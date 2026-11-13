@@ -675,6 +675,7 @@ async function handleCreateWorkspace() {
       ? () => setAuthRefreshKey((value) => value + 1)
       : undefined,
     onHome: () => navigateTo("/"),
+    onSwitchMode: () => navigateTo(currentPath === "/signup" ? "/login" : "/signup"),
   };
 
   if (currentPath === "/") {

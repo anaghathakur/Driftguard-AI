@@ -1,16 +1,17 @@
-# Terraform state bootstrap
+# Existing Terraform state bucket
 
-This isolated configuration creates the Google Cloud Storage bucket used by
-the main DriftGuard Terraform state backend. It deliberately has no remote
-backend because it is the one-time bootstrap step.
+`gs://driftguard-ai-tfstate` already exists and is the remote state backend.
+This module now reads and verifies that existing bucket only; it must not be
+applied to create or change infrastructure.
 
-After a reviewed bootstrap apply, initialize the parent configuration using
-the returned bucket name and an environment-specific state prefix:
+Initialize the main stack with the existing bucket and state prefix:
 
-    terraform -chdir=infra/gcp init \
-      -backend-config="bucket=YOUR_STATE_BUCKET" \
-      -backend-config="prefix=driftguard/production"
+```powershell
+terraform -chdir=infra/gcp init -reconfigure `
+  -backend-config="bucket=driftguard-ai-tfstate" `
+  -backend-config="prefix=driftguard/production"
+```
 
-The bucket enforces uniform bucket-level access, public-access prevention,
-versioning, and retains the ten newest state versions. Do not put secrets in
-Terraform state or in tfvars files.
+The bucket is outside the strict no-additional-cost application profile. Its
+Mumbai storage is not covered by Cloud Storage Always Free, so even its very
+small state object can create a tiny usage charge.
