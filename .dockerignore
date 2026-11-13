@@ -14,7 +14,6 @@ data/
 *.db
 
 apps/api/tests/
-apps/web/
 
 node_modules/
 dist/
